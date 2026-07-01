@@ -15,6 +15,22 @@
 # Run with: caddy run --config Caddyfile.production
 # (docker-compose.research-embed.yml already points its caddy service at
 # this file.)
+#
+# IMPORTANT -- what to put in DOMAIN:
+#   - A real, DNS-resolvable hostname (e.g. chat.yourlab.edu) -- Caddy
+#     automatically gets you a real Let's Encrypt certificate for it. This
+#     needs port 80/443 reachable from the public internet for the ACME
+#     challenge to succeed.
+#   - localhost, or another private/non-public name -- Caddy detects this
+#     and issues itself a local, self-signed certificate instead (your
+#     browser will show a "not secure" warning you can click through). Use
+#     this for local testing.
+#   - Anything else made up (e.g. example.com, mystudy.test) that isn't
+#     actually yours and resolvable -- Caddy will try real ACME issuance
+#     against Let's Encrypt, fail, and retry indefinitely. This is THE most
+#     common reason this stack appears to "hang" on first boot. If that
+#     happens, set DOMAIN=localhost for local testing, or a real domain you
+#     control for production, and restart the caddy container.
 
 {$DOMAIN} {
 	handle /enter* {

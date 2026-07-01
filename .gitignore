@@ -307,3 +307,13 @@ dist
 cypress/videos
 cypress/screenshots
 .vscode/settings.json
+
+# ---- Research embed / study data (this fork) ----
+# Once this fork is actually running a study, these can contain real
+# participant identifiers and chat transcripts -- keep them out of git
+# regardless of how they get created (only literal db.sqlite3 was covered
+# above, and backend/data/ had no rule of its own at all).
+*.sqlite3
+*.sqlite3-journal
+backend/data/
+entry-service/venv/

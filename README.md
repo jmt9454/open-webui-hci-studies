@@ -1,3 +1,19 @@
+## This fork: Open WebUI as a Qualtrics-embeddable research chat tool
+
+This repository is a fork of [Open WebUI](https://github.com/open-webui/open-webui)
+(BSD-3-Clause, unmodified license retained below) adding a "research embed"
+mode: a chat-only interface with no sidebar, no settings, and no way for a
+participant to see or reach anything else, embeddable directly in a Qualtrics
+survey (or similar). Each participant gets their own account and a single
+chat, created automatically the first time they load the embed link.
+
+**Setup, deployment, and researcher documentation lives in
+[RESEARCH-EMBED.md](./RESEARCH-EMBED.md) -- start there, not below.** The
+rest of this README is upstream Open WebUI's own documentation, kept as-is
+for reference and attribution.
+
+---
+
 # Open WebUI 👋
 
 ![GitHub stars](https://img.shields.io/github/stars/open-webui/open-webui?style=social)

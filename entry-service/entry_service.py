@@ -356,6 +356,20 @@ def clear_and_redirect(target_url: str) -> HTMLResponse:
     return HTMLResponse(content=body)
 
 
+@app.get("/health")
+def health():
+    """
+    Pure liveness check for Docker's HEALTHCHECK / compose's
+    `condition: service_healthy` -- deliberately does NOT call out to Open
+    WebUI or touch the SQLite file. This only needs to answer "is the
+    process itself up and serving requests", not "is the whole system
+    correctly configured yet" (that's what /enter's own 503s are for, since
+    a not-yet-configured entry service is a normal, valid state that
+    shouldn't make Docker think the container is unhealthy and restart it).
+    """
+    return JSONResponse({"status": "ok"})
+
+
 @app.post("/internal/admin-key")
 def receive_admin_key(payload: dict, x_sync_secret: str = Header(default="")):
     """

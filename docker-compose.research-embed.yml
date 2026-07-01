@@ -6,6 +6,10 @@
 # Usage:
 #   docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml up -d
 #
+# That pulls prebuilt images from GHCR (see .github/workflows/research-embed-images.yml)
+# instead of building anything locally -- should take seconds, not minutes,
+# and has no risk of the frontend build's memory-hungry OOM crash.
+#
 # Zero-touch bootstrap: you do NOT need to set anything beyond DOMAIN to
 # bring this stack up. Just:
 #   1. docker compose ... up -d
@@ -47,14 +51,26 @@
 
 services:
   open-webui:
-    # The base compose file tags this service's build output
-    # ghcr.io/open-webui/open-webui:main -- the exact name of the real
-    # upstream image. Building your fork with that file as-is would silently
-    # tag your local build with upstream's own image name, risking it
-    # overwriting (or being confused with) an actual pulled upstream image
-    # in your local Docker cache. `image:` is a scalar field, so unlike the
-    # `ports:` list note below, Compose *does* cleanly replace it here.
-    image: open-webui-hci-studies:latest
+    # Pulls the prebuilt image published by .github/workflows/research-embed-images.yml
+    # (GitHub Actions -> GHCR) instead of building the frontend locally --
+    # the frontend build is memory-hungry enough to OOM on a default
+    # Docker/WSL2 memory limit, so most researchers should never need to
+    # build it themselves. `docker compose up -d` with no `--build` flag
+    # will just pull this.
+    #
+    # If you've forked this repo and want to run YOUR OWN changes: either
+    # push to your fork's `main` branch (the Actions workflow publishes to
+    # your own ghcr.io/<you>/<your-repo-name> automatically -- update the
+    # image name below to match), or run
+    # `docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml build`
+    # to build from source locally instead (the base compose file's `build:`
+    # section is still there for this, untouched by this override file).
+    #
+    # `image:` is a scalar field, so unlike the `ports:` list note below,
+    # Compose cleanly replaces the base file's
+    # `ghcr.io/open-webui/open-webui:${WEBUI_DOCKER_TAG-main}` (the real
+    # upstream image name) with this fork's own image here.
+    image: ghcr.io/jmt9454/open-webui-hci-studies:latest
 
     # NOTE: Compose merges list fields (like the base file's `ports:` on
     # open-webui) across -f files by CONCATENATING them, not replacing them --
@@ -73,12 +89,26 @@ services:
       # what stops Compose from printing a "variable is not set" warning when
       # you haven't set one, since leaving it unset is the normal case now.
       - ENTRY_SERVICE_SYNC_SECRET=${ENTRY_SERVICE_SYNC_SECRET:-}
+      # Participant accounts are created exclusively by the entry service
+      # via the admin API -- the normal public sign-up page has no business
+      # being open on a research-embed deployment. Left on, anyone who finds
+      # the real Open WebUI URL (not just the /enter embed link) could
+      # self-register a normal, non-chat-only account, or a mischievous
+      # participant could register under the same email domain the entry
+      # service uses and mess with chat-only detection. Override to `true`
+      # here (or in your own .env) if you actually want public sign-ups for
+      # some other reason.
+      - ENABLE_SIGNUP=false
     volumes:
       # Where open-webui and entry-service auto-negotiate the shared sync
       # secret on first boot -- see the "Zero-touch bootstrap" note above.
       - shared-secret:/shared
 
   entry-service:
+    # Same pull-by-default / build-if-you-forked pattern as open-webui above,
+    # though this one's build is small and fast (no OOM risk) if you'd
+    # rather just always build it locally -- either works.
+    image: ghcr.io/jmt9454/open-webui-hci-studies-entry:latest
     build: ./entry-service
     container_name: entry-service
     environment:
@@ -94,25 +124,24 @@ services:
       - entry-data:/data
       - shared-secret:/shared
     depends_on:
-      - open-webui
+      open-webui:
+        condition: service_started
     restart: unless-stopped
 
   caddy:
     image: caddy:2
     container_name: caddy
-    # Remapped off 80/443 -- this host already runs nginx-proxy-manager as
-    # its main reverse proxy, which holds those ports for other services.
-    # Caddy's own internal listeners are still :80/:443 inside the
-    # container; only the host-side mapping changed, so this is purely a
-    # "which port do you type in the browser" difference, not a Caddyfile
-    # change. When you're ready to put this on its real public domain,
-    # either free up 80/443 for Caddy, or -- probably the better fit for
-    # this host long-term -- skip Caddy and add a Proxy Host in
-    # nginx-proxy-manager instead, with the same /enter* -> entry-service,
-    # everything else -> open-webui routing logic as Caddyfile.production.
+    # Standard 80/443 -- required for Caddy's automatic HTTPS (the ACME
+    # HTTP-01 challenge needs port 80 reachable from the internet) once
+    # DOMAIN is a real hostname. If something else on your host already
+    # binds 80/443 (another reverse proxy, etc.), either free up those ports
+    # for Caddy, or remap here (e.g. '8090:80' / '8453:443') and put a
+    # matching entry in your existing reverse proxy instead, forwarding
+    # /enter* -> entry-service:9000 and everything else -> open-webui:8080,
+    # same split as Caddyfile.production.
     ports:
-      - '8090:80'
-      - '8453:443'
+      - '80:80'
+      - '443:443'
     environment:
       - DOMAIN=${DOMAIN}
     volumes:
@@ -120,8 +149,10 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
-      - open-webui
-      - entry-service
+      open-webui:
+        condition: service_healthy
+      entry-service:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

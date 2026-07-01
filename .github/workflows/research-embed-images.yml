@@ -1,0 +1,77 @@
+name: Build and publish research-embed images
+
+# Builds this fork's two custom images (the main Open WebUI app + the
+# standalone entry service) and publishes them to GHCR, so other researchers
+# can `docker compose up -d` and just PULL a ready-made image instead of
+# building from source on their own machine (the frontend build is memory-
+# hungry enough to OOM on a default Docker/WSL2 memory limit -- see the
+# NODE_OPTIONS note in the root Dockerfile).
+#
+# Uses `github.repository` (lowercased) to name the images, so this workflow
+# works unmodified on any fork -- if you fork this repo and enable Actions,
+# your own images publish to ghcr.io/<your-username>/<your-repo-name> and
+# ghcr.io/<your-username>/<your-repo-name>-entry automatically.
+#
+# One-time manual step after this workflow's first successful run: GHCR
+# packages default to PRIVATE even in a public repo. Go to your GitHub
+# profile/org -> Packages -> select each of the two packages this creates ->
+# Package settings -> Change visibility -> Public. Otherwise
+# docker-compose.research-embed.yml's `docker compose pull` will fail with
+# an authentication error for anyone who isn't you.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute image names (lowercased, GHCR requires it)
+        id: vars
+        run: |
+          REPO_LC=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
+          echo "main_image=ghcr.io/${REPO_LC}" >> "$GITHUB_OUTPUT"
+          echo "entry_image=ghcr.io/${REPO_LC}-entry" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push main Open WebUI image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ steps.vars.outputs.main_image }}:latest
+            ${{ steps.vars.outputs.main_image }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push entry-service image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./entry-service
+          file: ./entry-service/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.vars.outputs.entry_image }}:latest
+            ${{ steps.vars.outputs.entry_image }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
