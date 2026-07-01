@@ -49,6 +49,15 @@
 
 	const i18n = getContext('i18n');
 
+	// --- Research embed: chat-only mode ---
+	// Set this to whatever domain the entry service uses for participant accounts.
+	const PARTICIPANT_EMAIL_DOMAIN = 'participants.local';
+
+	$: isParticipant = $user?.email?.endsWith('@' + PARTICIPANT_EMAIL_DOMAIN) ?? false;
+	$: staffPreview = $page.url.searchParams.get('chatOnly') === 'true';
+	$: chatOnly = isParticipant || staffPreview;
+	// --- end research embed ---
+
 	let loaded = false;
 	let DB = null;
 	let localDBChats = [];
@@ -236,7 +245,9 @@
 	};
 </script>
 
-<SettingsModal bind:show={$showSettings} />
+{#if !chatOnly}
+	<SettingsModal bind:show={$showSettings} />
+{/if}
 <ChangelogModal bind:show={$showChangelog} />
 
 {#if version && compareVersion(version.latest, version.current) && ($settings?.showUpdateToast ?? true)}
@@ -311,7 +322,9 @@
 			</div>
 		{/if}
 
-		<Sidebar />
+		{#if !chatOnly}
+			<Sidebar />
+		{/if}
 
 		{#if loaded}
 			<slot />

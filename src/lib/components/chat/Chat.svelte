@@ -91,6 +91,15 @@
 
 	export let chatIdProp = '';
 
+	// --- Research embed: chat-only mode ---
+	// Keep this in sync with src/routes/(app)/+layout.svelte.
+	const PARTICIPANT_EMAIL_DOMAIN = 'participants.local';
+
+	$: isParticipant = $user?.email?.endsWith('@' + PARTICIPANT_EMAIL_DOMAIN) ?? false;
+	$: staffPreview = $page.url.searchParams.get('chatOnly') === 'true';
+	$: chatOnly = isParticipant || staffPreview;
+	// --- end research embed ---
+
 	let loading = false;
 
 	const eventTarget = new EventTarget();
@@ -1967,25 +1976,27 @@
 
 		<PaneGroup direction="horizontal" class="w-full h-full">
 			<Pane defaultSize={50} class="h-full flex relative max-w-full flex-col">
-				<Navbar
-					bind:this={navbarElement}
-					chat={{
-						id: $chatId,
-						chat: {
-							title: $chatTitle,
-							models: selectedModels,
-							system: $settings.system ?? undefined,
-							params: params,
-							history: history,
-							timestamp: Date.now()
-						}
-					}}
-					{history}
-					title={$chatTitle}
-					bind:selectedModels
-					shareEnabled={!!history.currentId}
-					{initNewChat}
-				/>
+				{#if !chatOnly}
+					<Navbar
+						bind:this={navbarElement}
+						chat={{
+							id: $chatId,
+							chat: {
+								title: $chatTitle,
+								models: selectedModels,
+								system: $settings.system ?? undefined,
+								params: params,
+								history: history,
+								timestamp: Date.now()
+							}
+						}}
+						{history}
+						title={$chatTitle}
+						bind:selectedModels
+						shareEnabled={!!history.currentId}
+						{initNewChat}
+					/>
+				{/if}
 
 				<div class="flex flex-col flex-auto z-10 w-full @container">
 					{#if $settings?.landingPageMode === 'chat' || createMessagesList(history, history.currentId).length > 0}
