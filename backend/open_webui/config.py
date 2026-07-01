@@ -2693,3 +2693,57 @@ LDAP_CA_CERT_FILE = PersistentConfig(
 LDAP_CIPHERS = PersistentConfig(
     "LDAP_CIPHERS", "ldap.server.ciphers", os.environ.get("LDAP_CIPHERS", "ALL")
 )
+
+####################################
+# Research Embed
+#
+# Admin-configurable settings for embedding this instance as a chat-only
+# research tool (e.g. in a Qualtrics survey). Consumed by the standalone
+# entry service (see /entry-service) via GET /api/v1/research-embed/config,
+# and by SecurityHeadersMiddleware for the frame-ancestors CSP override.
+# Env vars are only the *initial* value -- once an admin saves this page in
+# Admin Panel > Settings > Research Embed, the database value takes over
+# (same PersistentConfig behavior as every other setting in this file).
+####################################
+
+RESEARCH_EMBED_MODEL_ID = PersistentConfig(
+    "RESEARCH_EMBED_MODEL_ID",
+    "research_embed.model_id",
+    os.environ.get("RESEARCH_EMBED_MODEL_ID", ""),
+)
+
+RESEARCH_EMBED_SEED_MESSAGE = PersistentConfig(
+    "RESEARCH_EMBED_SEED_MESSAGE",
+    "research_embed.seed_message",
+    os.environ.get("RESEARCH_EMBED_SEED_MESSAGE", ""),
+)
+
+RESEARCH_EMBED_PARTICIPANT_ID_PARAM = PersistentConfig(
+    "RESEARCH_EMBED_PARTICIPANT_ID_PARAM",
+    "research_embed.participant_id_param",
+    os.environ.get("RESEARCH_EMBED_PARTICIPANT_ID_PARAM", "pid"),
+)
+
+RESEARCH_EMBED_PARTICIPANT_ID_REGEX = PersistentConfig(
+    "RESEARCH_EMBED_PARTICIPANT_ID_REGEX",
+    "research_embed.participant_id_regex",
+    os.environ.get("RESEARCH_EMBED_PARTICIPANT_ID_REGEX", r"^R_[a-zA-Z0-9]{15,32}$"),
+)
+
+RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN = PersistentConfig(
+    "RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN",
+    "research_embed.participant_email_domain",
+    os.environ.get("RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN", "participants.local"),
+)
+
+# Origin allowed to iframe-embed this instance (e.g. "https://yourorg.qualtrics.com").
+# Empty string means "no override" -- CSP falls back to whatever the
+# CONTENT_SECURITY_POLICY / XFRAME_OPTIONS env vars say (see security_headers.py),
+# which defaults to no explicit header at all, i.e. embeddable nowhere is NOT
+# the default; browsers only block framing if a header says to. Set this once
+# you know your survey platform's real domain, not before.
+RESEARCH_EMBED_ALLOWED_ORIGIN = PersistentConfig(
+    "RESEARCH_EMBED_ALLOWED_ORIGIN",
+    "research_embed.allowed_origin",
+    os.environ.get("RESEARCH_EMBED_ALLOWED_ORIGIN", ""),
+)

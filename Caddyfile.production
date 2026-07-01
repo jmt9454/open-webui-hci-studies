@@ -1,0 +1,26 @@
+# Production reverse proxy for the Open WebUI research embed.
+#
+# Single hostname, split by path, so admins and participants share one
+# domain but never cross paths (admin at /auth, /admin, /c/*; participants
+# only ever hit /enter -> redirected into a chat-only /c/{id}).
+#
+# Unlike the guide this repo started from, this Caddyfile does NOT set a
+# Content-Security-Policy / frame-ancestors header. That's handled by Open
+# WebUI's own backend now (backend/open_webui/utils/security_headers.py +
+# the RESEARCH_EMBED_ALLOWED_ORIGIN setting in Admin Panel > Settings >
+# Research Embed), so it's admin-editable at runtime without touching this
+# file or restarting Caddy. Set DOMAIN below and, once you're live, set your
+# survey platform's origin in that Admin Panel page.
+#
+# Run with: caddy run --config Caddyfile.production
+# (docker-compose.research-embed.yml already points its caddy service at
+# this file.)
+
+{$DOMAIN} {
+	handle /enter* {
+		reverse_proxy entry-service:9000
+	}
+	handle {
+		reverse_proxy open-webui:8080
+	}
+}

@@ -76,6 +76,7 @@ from open_webui.routers import (
     tools,
     users,
     utils,
+    research_embed,
 )
 
 from open_webui.routers.retrieval import (
@@ -293,6 +294,13 @@ from open_webui.config import (
     LDAP_USE_TLS,
     LDAP_CA_CERT_FILE,
     LDAP_CIPHERS,
+    # Research Embed
+    RESEARCH_EMBED_MODEL_ID,
+    RESEARCH_EMBED_SEED_MESSAGE,
+    RESEARCH_EMBED_PARTICIPANT_ID_PARAM,
+    RESEARCH_EMBED_PARTICIPANT_ID_REGEX,
+    RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN,
+    RESEARCH_EMBED_ALLOWED_ORIGIN,
     # Misc
     ENV,
     CACHE_DIR,
@@ -530,6 +538,15 @@ app.state.config.JWT_EXPIRES_IN = JWT_EXPIRES_IN
 
 app.state.config.SHOW_ADMIN_DETAILS = SHOW_ADMIN_DETAILS
 app.state.config.ADMIN_EMAIL = ADMIN_EMAIL
+
+app.state.config.RESEARCH_EMBED_MODEL_ID = RESEARCH_EMBED_MODEL_ID
+app.state.config.RESEARCH_EMBED_SEED_MESSAGE = RESEARCH_EMBED_SEED_MESSAGE
+app.state.config.RESEARCH_EMBED_PARTICIPANT_ID_PARAM = RESEARCH_EMBED_PARTICIPANT_ID_PARAM
+app.state.config.RESEARCH_EMBED_PARTICIPANT_ID_REGEX = RESEARCH_EMBED_PARTICIPANT_ID_REGEX
+app.state.config.RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN = (
+    RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN
+)
+app.state.config.RESEARCH_EMBED_ALLOWED_ORIGIN = RESEARCH_EMBED_ALLOWED_ORIGIN
 
 
 app.state.config.DEFAULT_MODELS = DEFAULT_MODELS
@@ -948,6 +965,12 @@ app.include_router(audio.router, prefix="/api/v1/audio", tags=["audio"])
 app.include_router(retrieval.router, prefix="/api/v1/retrieval", tags=["retrieval"])
 
 app.include_router(configs.router, prefix="/api/v1/configs", tags=["configs"])
+
+app.include_router(
+    research_embed.router,
+    prefix="/api/v1/research-embed",
+    tags=["research-embed"],
+)
 
 app.include_router(auths.router, prefix="/api/v1/auths", tags=["auths"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])

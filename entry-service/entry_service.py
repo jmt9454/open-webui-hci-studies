@@ -5,9 +5,13 @@ Handles participant identity and hands each participant off to their own
 chat in the forked Open WebUI instance. Talks to Open WebUI ONLY through its
 own public REST API (never touches its internals / Python code directly):
 
-  - POST /api/v1/auths/add     -- create a participant account (admin token)
-  - POST /api/v1/auths/signin  -- sign in as that participant (email+password)
-  - GET  /api/v1/chats/list    -- check whether the participant already has a chat
+  - GET  /api/v1/research-embed/config -- admin-configured settings (model,
+                                           seed message, participant ID
+                                           format, etc.) -- see Admin Panel >
+                                           Settings > Research Embed
+  - POST /api/v1/auths/add             -- create a participant account (admin token)
+  - POST /api/v1/auths/signin          -- sign in as that participant (email+password)
+  - GET  /api/v1/chats/list            -- check whether the participant already has a chat
 
 Design notes (verified against the actual v0.6.5 source, not just docs):
 
@@ -43,6 +47,15 @@ Design notes (verified against the actual v0.6.5 source, not just docs):
     that clears localStorage before navigating, so every /enter hit starts
     from a clean slate.
 
+  - Model, seed message, participant ID param/regex, and the participant
+    email domain are fetched live from GET /api/v1/research-embed/config
+    (Admin Panel > Settings > Research Embed) on every request, cached for
+    CONFIG_CACHE_TTL_SECONDS so a professor's changes take effect within
+    that window without redeploying this service. If that endpoint is
+    unreachable (backend down, wrong admin key, or an older Open WebUI fork
+    that doesn't have this router yet), this falls back to the env vars
+    below rather than failing every /enter request outright.
+
 Two things you should still double-check against your own instance before
 trusting this in production (see the guide's "verify" callouts):
   1. That WEBUI_AUTH_TRUSTED_EMAIL_HEADER is NOT set on your Open WebUI
@@ -55,10 +68,13 @@ trusting this in production (see the guide's "verify" callouts):
 """
 
 import html
+import logging
 import os
 import re
 import secrets
 import sqlite3
+import threading
+import time
 from urllib.parse import quote, urlencode
 
 import requests
@@ -66,18 +82,81 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 app = FastAPI()
+log = logging.getLogger("entry_service")
 
-# ---- Configuration -- change via env vars, no code edits needed ----
-PARTICIPANT_ID_PARAM = os.environ.get("PARTICIPANT_ID_PARAM", "pid")
-PARTICIPANT_ID_REGEX = os.environ.get("PARTICIPANT_ID_REGEX", r"^R_[a-zA-Z0-9]{15,32}$")
-PARTICIPANT_EMAIL_DOMAIN = os.environ.get("PARTICIPANT_EMAIL_DOMAIN", "participants.local")
-DEFAULT_SEED_MESSAGE = os.environ.get("DEFAULT_SEED_MESSAGE", "")
-DEFAULT_MODEL_ID = os.environ["DEFAULT_MODEL_ID"]  # e.g. "gpt-4o" -- see Part 4 to find yours
+# ---- Fixed operational config -- always from env vars, never admin-editable ----
+# (Fetching these two remotely would be circular/insecure: they're what let
+# this service talk to Open WebUI's admin API in the first place.)
 OPEN_WEBUI_BASE_URL = os.environ.get("OPEN_WEBUI_BASE_URL", "http://open-webui:8080")
 OPEN_WEBUI_ADMIN_API_KEY = os.environ["OPEN_WEBUI_ADMIN_API_KEY"]  # required, no default
 DB_PATH = os.environ.get("DB_PATH", "/data/participants.sqlite3")
 
-ID_PATTERN = re.compile(PARTICIPANT_ID_REGEX)
+# ---- Study config -- these have env var defaults, but Admin Panel > Settings >
+# Research Embed (once saved at least once) takes priority. See get_live_config(). ----
+_ENV_DEFAULTS = {
+    "RESEARCH_EMBED_MODEL_ID": os.environ.get("DEFAULT_MODEL_ID", ""),
+    "RESEARCH_EMBED_SEED_MESSAGE": os.environ.get("DEFAULT_SEED_MESSAGE", ""),
+    "RESEARCH_EMBED_PARTICIPANT_ID_PARAM": os.environ.get("PARTICIPANT_ID_PARAM", "pid"),
+    "RESEARCH_EMBED_PARTICIPANT_ID_REGEX": os.environ.get(
+        "PARTICIPANT_ID_REGEX", r"^R_[a-zA-Z0-9]{15,32}$"
+    ),
+    "RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN": os.environ.get(
+        "PARTICIPANT_EMAIL_DOMAIN", "participants.local"
+    ),
+}
+
+CONFIG_CACHE_TTL_SECONDS = 30
+_config_cache = {"value": None, "fetched_at": 0.0}
+_config_lock = threading.Lock()
+
+
+def admin_headers():
+    return {
+        "Authorization": f"Bearer {OPEN_WEBUI_ADMIN_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+def get_live_config() -> dict:
+    """
+    Merges the admin-configured settings (Admin Panel > Settings > Research
+    Embed) over this service's own env var defaults. Cached briefly so every
+    participant request doesn't round-trip to the backend just to read
+    config that rarely changes.
+    """
+    now = time.monotonic()
+    with _config_lock:
+        cached = _config_cache["value"]
+        if cached is not None and (now - _config_cache["fetched_at"]) < CONFIG_CACHE_TTL_SECONDS:
+            return cached
+
+    merged = dict(_ENV_DEFAULTS)
+    try:
+        resp = requests.get(
+            f"{OPEN_WEBUI_BASE_URL}/api/v1/research-embed/config",
+            headers=admin_headers(),
+            timeout=5,
+        )
+        resp.raise_for_status()
+        remote = resp.json()
+        for key in _ENV_DEFAULTS:
+            value = remote.get(key)
+            if value:  # only override with non-empty values -- an admin who
+                merged[key] = value  # hasn't touched a field yet shouldn't
+                # blank out a working env var default.
+    except Exception as e:
+        log.warning(
+            "Could not fetch live config from %s/api/v1/research-embed/config "
+            "(%s) -- falling back to this service's own env vars.",
+            OPEN_WEBUI_BASE_URL,
+            e,
+        )
+
+    with _config_lock:
+        _config_cache["value"] = merged
+        _config_cache["fetched_at"] = now
+
+    return merged
 
 
 def get_db():
@@ -95,14 +174,7 @@ def get_db():
     return conn
 
 
-def admin_headers():
-    return {
-        "Authorization": f"Bearer {OPEN_WEBUI_ADMIN_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-
-def get_or_create_participant(conn, external_id: str):
+def get_or_create_participant(conn, external_id: str, email_domain: str):
     row = conn.execute(
         "SELECT email, password FROM participants WHERE external_id = ?",
         (external_id,),
@@ -110,7 +182,7 @@ def get_or_create_participant(conn, external_id: str):
     if row is not None:
         return row  # (email, password)
 
-    email = f"{external_id}@{PARTICIPANT_EMAIL_DOMAIN}"
+    email = f"{external_id}@{email_domain}"
     password = secrets.token_urlsafe(24)
 
     resp = requests.post(
@@ -155,9 +227,8 @@ def find_existing_chat_id(token: str):
 
 def clear_and_redirect(target_url: str) -> HTMLResponse:
     """Clear any stale localStorage session before handing off, then send the
-    browser to `target_url` (kept out of the Location header / server logs
-    isn't the goal here -- the token itself is only ever transmitted in a URL
-    fragment, which browsers never send to any server)."""
+    browser to `target_url` (the token itself is only ever transmitted in a
+    URL fragment, which browsers never send to any server)."""
     safe_url = html.escape(target_url, quote=True)
     body = f"""<!doctype html>
 <html><head><meta charset="utf-8"></head>
@@ -172,15 +243,32 @@ def clear_and_redirect(target_url: str) -> HTMLResponse:
 
 @app.get("/enter")
 def enter(request: Request):
-    external_id = request.query_params.get(PARTICIPANT_ID_PARAM, "")
+    live = get_live_config()
+
+    participant_id_param = live["RESEARCH_EMBED_PARTICIPANT_ID_PARAM"]
+    try:
+        id_pattern = re.compile(live["RESEARCH_EMBED_PARTICIPANT_ID_REGEX"])
+    except re.error:
+        # An admin could in principle save an invalid regex (the Admin UI
+        # validates this before saving, but env-var-only deployments don't
+        # go through that check) -- fail closed rather than 500 on every hit.
+        log.error(
+            "RESEARCH_EMBED_PARTICIPANT_ID_REGEX is not a valid regex: %r",
+            live["RESEARCH_EMBED_PARTICIPANT_ID_REGEX"],
+        )
+        return PlainTextResponse("Server misconfiguration.", status_code=500)
+
+    external_id = request.query_params.get(participant_id_param, "")
     seed_override = request.query_params.get("seed")
 
-    if not ID_PATTERN.match(external_id):
+    if not id_pattern.match(external_id):
         return PlainTextResponse("Missing or invalid participant ID.", status_code=400)
 
     conn = get_db()
     try:
-        email, password = get_or_create_participant(conn, external_id)
+        email, password = get_or_create_participant(
+            conn, external_id, live["RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN"]
+        )
     finally:
         conn.close()
 
@@ -191,10 +279,18 @@ def enter(request: Request):
         # Returning participant -- straight back to their one chat, no reseed.
         target = f"/c/{chat_id}?" + urlencode({"chatOnly": "true"})
     else:
+        model_id = live["RESEARCH_EMBED_MODEL_ID"]
+        if not model_id:
+            return PlainTextResponse(
+                "This study isn't configured yet -- an admin needs to pick a "
+                "model in Admin Panel > Settings > Research Embed.",
+                status_code=503,
+            )
+
         # First-ever visit -- land on a brand-new chat. Open WebUI's own
         # `q` param (initNewChat(), Chat.svelte) auto-submits it for us.
-        seed_text = seed_override or DEFAULT_SEED_MESSAGE
-        params = {"chatOnly": "true", "models": DEFAULT_MODEL_ID}
+        seed_text = seed_override or live["RESEARCH_EMBED_SEED_MESSAGE"]
+        params = {"chatOnly": "true", "models": model_id}
         if seed_text:
             params["q"] = seed_text
         target = "/?" + urlencode(params)

@@ -9,11 +9,11 @@ from typing import Dict
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        response.headers.update(set_security_headers())
+        response.headers.update(set_security_headers(request))
         return response
 
 
-def set_security_headers() -> Dict[str, str]:
+def set_security_headers(request: Request = None) -> Dict[str, str]:
     """
     Sets security headers based on environment variables.
 
@@ -55,6 +55,26 @@ def set_security_headers() -> Dict[str, str]:
             header = setter(value)
             if header:
                 options.update(header)
+
+    # --- Research embed: admin-configurable frame-ancestors override ---
+    # RESEARCH_EMBED_ALLOWED_ORIGIN (Admin Panel > Settings > Research Embed)
+    # takes priority over the static CONTENT_SECURITY_POLICY env var above,
+    # since this is the setting that actually lets a Qualtrics iframe render
+    # this instance, and it needs to be changeable without redeploying.
+    # A stale XFRAME_OPTIONS env var (e.g. DENY/SAMEORIGIN) would otherwise
+    # silently override this in the browser regardless of CSP, so it's
+    # dropped whenever an allowed origin is configured.
+    allowed_origin = ""
+    if request is not None:
+        try:
+            allowed_origin = request.app.state.config.RESEARCH_EMBED_ALLOWED_ORIGIN
+        except AttributeError:
+            allowed_origin = ""
+
+    if allowed_origin:
+        options["Content-Security-Policy"] = f"frame-ancestors {allowed_origin}"
+        options.pop("X-Frame-Options", None)
+    # --- end research embed ---
 
     return options
 
