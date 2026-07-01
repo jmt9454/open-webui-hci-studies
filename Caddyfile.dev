@@ -1,0 +1,23 @@
+# Throwaway LOCAL DEV config, not the production Caddyfile from the guide's Part 5.
+#
+# Unifies the entry service and the Vite dev server under one origin so the
+# entry service's relative redirects (/auth, /c/{id}) resolve correctly, and
+# so localStorage (which the frontend's auth session lives in) is scoped to
+# one hostname instead of being split across two dev ports.
+#
+# Note: in dev mode, Open WebUI's frontend calls the backend API via an
+# ABSOLUTE http://<host>:8080 URL (see src/lib/constants.ts, WEBUI_HOSTNAME),
+# not through whatever served the page. So this proxy does NOT need to route
+# /api/* anywhere -- the browser hits port 8080 directly for those. Only
+# page routes (-> Vite) and /enter (-> entry service) need to go through here.
+#
+# Run with: caddy run --config Caddyfile.dev
+
+:8888 {
+	handle /enter* {
+		reverse_proxy localhost:9000
+	}
+	handle {
+		reverse_proxy localhost:5173
+	}
+}
