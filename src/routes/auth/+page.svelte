@@ -89,6 +89,14 @@
 		}
 	};
 
+	// --- Research embed: show a branded "signing in" splash instead of a
+	// flash of the login form during the entry service's token handoff.
+	// Reuses the same "Signing in to {WEBUI_NAME}" + Spinner branch already
+	// used for trusted-header auto-login (see the template below), so it
+	// automatically picks up whatever WEBUI_NAME / splash.png branding is
+	// configured (Part 1's optional branding step).
+	let isTokenHandoff = false;
+
 	const checkOauthCallback = async () => {
 		if (!$page.url.hash) {
 			return;
@@ -102,16 +110,23 @@
 		if (!token) {
 			return;
 		}
+
+		isTokenHandoff = true;
+
 		const sessionUser = await getSessionUser(token).catch((error) => {
 			toast.error(`${error}`);
 			return null;
 		});
 		if (!sessionUser) {
+			// Invalid/expired token -- fall back to the normal sign-in form
+			// rather than leaving the user stuck on the splash forever.
+			isTokenHandoff = false;
 			return;
 		}
 		localStorage.token = token;
 		await setSessionUser(sessionUser);
 	};
+	// --- end research embed ---
 
 	let onboarding = false;
 
@@ -194,7 +209,7 @@
 			class="fixed bg-transparent min-h-screen w-full flex justify-center font-primary z-50 text-black dark:text-white"
 		>
 			<div class="w-full sm:max-w-md px-10 min-h-screen flex flex-col text-center">
-				{#if ($config?.features.auth_trusted_header ?? false) || $config?.features.auth === false}
+				{#if ($config?.features.auth_trusted_header ?? false) || $config?.features.auth === false || isTokenHandoff}
 					<div class=" my-auto pb-10 w-full">
 						<div
 							class="flex items-center justify-center gap-3 text-xl sm:text-2xl text-center font-semibold dark:text-gray-200"
