@@ -12,12 +12,27 @@
 # page routes (-> Vite) and /enter (-> entry service) need to go through here.
 #
 # Run with: caddy run --config Caddyfile.dev
+#
+# If you get "address already in use" on port 2019, another Caddy instance's
+# admin API already owns it -- the {admin off} line below disables this
+# instance's admin API entirely, which we don't need for local testing.
+
+{
+	admin off
+}
 
 :8888 {
 	handle /enter* {
 		reverse_proxy localhost:9000
 	}
 	handle {
-		reverse_proxy localhost:5173
+		# NOTE: pointed at 10.2.0.2 instead of localhost because the npm run dev
+		# process turned out to be running in a different WSL network namespace
+		# than Caddy/entry-service. This IP is assigned by WSL2's NAT and can
+		# change on reboot -- if this stops working later, re-run
+		# `curl -I http://<ip>:5173` from candidate WSL IPs (or better: restart
+		# `npm run dev` from the same terminal/profile you use for the other
+		# processes so everything shares one loopback again).
+		reverse_proxy 10.2.0.2:5173
 	}
 }
