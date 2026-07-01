@@ -6,11 +6,14 @@
 	import {
 		getResearchEmbedConfig,
 		updateResearchEmbedConfig,
-		getResearchEmbedCode
+		getResearchEmbedCode,
+		syncEntryService
 	} from '$lib/apis/researchEmbed';
+	import { createAPIKey } from '$lib/apis/auths';
 	import { copyToClipboard } from '$lib/utils';
 
 	import Textarea from '$lib/components/common/Textarea.svelte';
+	import Spinner from '$lib/components/common/Spinner.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -20,6 +23,8 @@
 
 	let embedCode = null;
 	let loadingEmbedCode = false;
+
+	let connectingEntryService = false;
 
 	const submitHandler = async () => {
 		const res = await updateResearchEmbedConfig(localStorage.token, config).catch((error) => {
@@ -42,6 +47,35 @@
 			return null;
 		});
 		loadingEmbedCode = false;
+	};
+
+	const connectEntryServiceHandler = async () => {
+		connectingEntryService = true;
+
+		// Generates a fresh API key for *this* admin account (already-existing
+		// endpoint, POST /api/v1/auths/api_key) and hands it to the entry
+		// service over the internal Docker network -- no .env editing, no
+		// container restart. See backend/open_webui/routers/research_embed.py
+		// and entry-service/entry_service.py's POST /internal/admin-key.
+		const keyRes = await createAPIKey(localStorage.token).catch((error) => {
+			toast.error(`${error}`);
+			return null;
+		});
+
+		if (keyRes?.api_key) {
+			const syncRes = await syncEntryService(localStorage.token, keyRes.api_key).catch(
+				(error) => {
+					toast.error(`${error}`);
+					return null;
+				}
+			);
+
+			if (syncRes) {
+				toast.success($i18n.t('Entry service connected.'));
+			}
+		}
+
+		connectingEntryService = false;
 	};
 
 	onMount(async () => {
@@ -173,6 +207,32 @@
 							)}
 						</div>
 					</div>
+				</div>
+
+				<div class="mb-3.5">
+					<div class=" mb-2.5 text-base font-medium">
+						{$i18n.t('Connect Entry Service')}
+					</div>
+
+					<hr class=" border-gray-100 dark:border-gray-850 my-2" />
+
+					<div class="text-xs text-gray-500 mb-2.5">
+						{$i18n.t(
+							'The standalone entry service (Part 3) needs an admin API key to create participant accounts. Click below to generate one for your account and push it to the entry service automatically -- no .env editing or container restart needed. Safe to click again any time (e.g. after rotating keys).'
+						)}
+					</div>
+
+					<button
+						type="button"
+						class="px-3.5 py-1.5 text-xs font-medium bg-gray-50 hover:bg-gray-100 dark:bg-gray-850 dark:hover:bg-gray-800 dark:text-white transition rounded-full flex items-center gap-2"
+						disabled={connectingEntryService}
+						on:click={connectEntryServiceHandler}
+					>
+						{#if connectingEntryService}
+							<Spinner className="size-3.5" />
+						{/if}
+						{$i18n.t('Connect Entry Service')}
+					</button>
 				</div>
 
 				<div class="mb-3.5">

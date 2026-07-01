@@ -56,15 +56,26 @@ Design notes (verified against the actual v0.6.5 source, not just docs):
     that doesn't have this router yet), this falls back to the env vars
     below rather than failing every /enter request outright.
 
-Two things you should still double-check against your own instance before
-trusting this in production (see the guide's "verify" callouts):
-  1. That WEBUI_AUTH_TRUSTED_EMAIL_HEADER is NOT set on your Open WebUI
-     instance. If it is, /api/v1/auths/signin takes a completely different
-     code path (trusted-header auth) and ignores the email/password this
-     service sends.
-  2. That ENABLE_API_KEYS is on and you've generated an admin API key
-     (Admin Panel -> Settings -> Account -> API Keys) for
-     OPEN_WEBUI_ADMIN_API_KEY below.
+There is no manual "generate a key, paste it into .env, restart the
+container" step needed anymore. On first boot this service has no admin key
+at all and /enter says so clearly. Once an admin creates their account
+through Open WebUI's normal onboarding screen, a button in Admin Panel >
+Settings > Research Embed ("Connect Entry Service") generates a fresh API
+key for that admin and pushes it here over the internal Docker network
+(POST /internal/admin-key, gated by ENTRY_SERVICE_SYNC_SECRET -- auto-
+generated on first use and shared with Open WebUI's backend via a small
+Docker volume, see _get_or_create_shared_secret below, so there's no
+bootstrapping problem: neither side needs a human to generate and hand off
+a value before either one exists). The key is persisted to KEY_FILE_PATH so
+it survives this container restarting on its own. OPEN_WEBUI_ADMIN_API_KEY
+as an env var still works too, for scripted/advanced deployments that want
+to skip the button entirely -- it just takes priority if set.
+
+One thing you should still double-check against your own instance before
+trusting this in production (see the guide's "verify" callouts): that
+WEBUI_AUTH_TRUSTED_EMAIL_HEADER is NOT set. If it is, /api/v1/auths/signin
+takes a completely different code path (trusted-header auth) and ignores
+the email/password this service sends.
 """
 
 import html
@@ -78,18 +89,122 @@ import time
 from urllib.parse import quote, urlencode
 
 import requests
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 app = FastAPI()
 log = logging.getLogger("entry_service")
 
 # ---- Fixed operational config -- always from env vars, never admin-editable ----
-# (Fetching these two remotely would be circular/insecure: they're what let
-# this service talk to Open WebUI's admin API in the first place.)
 OPEN_WEBUI_BASE_URL = os.environ.get("OPEN_WEBUI_BASE_URL", "http://open-webui:8080")
-OPEN_WEBUI_ADMIN_API_KEY = os.environ["OPEN_WEBUI_ADMIN_API_KEY"]  # required, no default
 DB_PATH = os.environ.get("DB_PATH", "/data/participants.sqlite3")
+KEY_FILE_PATH = os.environ.get("KEY_FILE_PATH", "/data/admin_api_key.txt")
+
+def _get_or_create_shared_secret(path: str) -> str:
+    """
+    Reads a secret from `path`, generating and atomically persisting a new
+    one the first time either side needs it. `path` lives on a Docker volume
+    mounted into both this service and Open WebUI's backend (the
+    `shared-secret` volume in docker-compose.research-embed.yml), so whichever
+    container happens to boot first (or first hit this code) wins, and the
+    other one just reads the same value back moments later -- nobody has to
+    generate a value by hand and paste it into .env on both sides before
+    either container can start.
+
+    os.link() is what makes "create only if nobody beat us to it" atomic
+    across two independent processes without an external lock: it's a
+    hard-link, which the filesystem refuses to create if the destination
+    already exists -- unlike a plain `open(path, "w")`, which would silently
+    clobber whatever the other side just wrote.
+    """
+    try:
+        with open(path) as f:
+            existing = f.read().strip()
+            if existing:
+                return existing
+    except FileNotFoundError:
+        pass
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    candidate = secrets.token_hex(32)
+    tmp_path = f"{path}.tmp.{os.getpid()}"
+    with open(tmp_path, "w") as f:
+        f.write(candidate)
+    try:
+        os.link(tmp_path, path)
+    except FileExistsError:
+        pass  # the other side won the race -- fine, we'll read its value below
+    finally:
+        os.remove(tmp_path)
+
+    with open(path) as f:
+        return f.read().strip()
+
+
+# Shared secret authenticating the internal push from Open WebUI's backend
+# (see POST /internal/admin-key below). An explicit ENTRY_SERVICE_SYNC_SECRET
+# env var always wins (for scripted/advanced deployments that want a fixed,
+# known value); otherwise it's auto-generated on first use and shared with
+# Open WebUI's backend via a small Docker volume (see
+# _get_or_create_shared_secret) -- no manual .env setup needed on either side.
+SHARED_SECRET_FILE_PATH = os.environ.get(
+    "SHARED_SECRET_FILE_PATH", "/shared/entry_service_sync_secret"
+)
+ENTRY_SERVICE_SYNC_SECRET = os.environ.get("ENTRY_SERVICE_SYNC_SECRET", "")
+if not ENTRY_SERVICE_SYNC_SECRET:
+    try:
+        ENTRY_SERVICE_SYNC_SECRET = _get_or_create_shared_secret(SHARED_SECRET_FILE_PATH)
+    except OSError as e:
+        # Fails loudly on purpose rather than falling back to a per-process
+        # random value: two independently-generated secrets would silently
+        # break the sync handshake in a much more confusing way (403s that
+        # look like a wrong-password bug) than a clear crash-on-boot pointing
+        # at the actual cause -- almost always a missing/misconfigured
+        # `shared-secret` volume mount.
+        raise RuntimeError(
+            f"Could not read or create a shared sync secret at "
+            f"{SHARED_SECRET_FILE_PATH} ({e}). Check that the `shared-secret` "
+            "Docker volume is mounted into this container (see "
+            "docker-compose.research-embed.yml), or set ENTRY_SERVICE_SYNC_SECRET "
+            "directly as an env var to bypass auto-generation entirely."
+        ) from e
+
+# ---- Admin API key -- mutable at runtime, see /internal/admin-key ----
+# Priority: env var (if set) > persisted file from a previous sync > unset.
+# Held in a dict (not a bare module-level string) so admin_headers() always
+# reads the current value even after a runtime update, without needing
+# `global` reassignment sprinkled through the file.
+_admin_key_state = {"value": os.environ.get("OPEN_WEBUI_ADMIN_API_KEY", "")}
+if not _admin_key_state["value"] and os.path.exists(KEY_FILE_PATH):
+    try:
+        with open(KEY_FILE_PATH) as f:
+            _admin_key_state["value"] = f.read().strip()
+    except OSError as e:
+        log.warning("Could not read persisted admin key from %s: %s", KEY_FILE_PATH, e)
+
+
+def is_admin_key_configured() -> bool:
+    return bool(_admin_key_state["value"])
+
+
+def set_admin_key(api_key: str) -> None:
+    _admin_key_state["value"] = api_key
+    try:
+        os.makedirs(os.path.dirname(KEY_FILE_PATH), exist_ok=True)
+        with open(KEY_FILE_PATH, "w") as f:
+            f.write(api_key)
+    except OSError as e:
+        log.warning(
+            "Admin key updated in memory but could not persist to %s (%s) -- "
+            "it won't survive this container restarting.",
+            KEY_FILE_PATH,
+            e,
+        )
+    # The new key might unlock config that was previously unreachable.
+    with _config_lock:
+        _config_cache["value"] = None
+        _config_cache["fetched_at"] = 0.0
+
 
 # ---- Study config -- these have env var defaults, but Admin Panel > Settings >
 # Research Embed (once saved at least once) takes priority. See get_live_config(). ----
@@ -112,7 +227,7 @@ _config_lock = threading.Lock()
 
 def admin_headers():
     return {
-        "Authorization": f"Bearer {OPEN_WEBUI_ADMIN_API_KEY}",
+        "Authorization": f"Bearer {_admin_key_state['value']}",
         "Content-Type": "application/json",
     }
 
@@ -241,8 +356,48 @@ def clear_and_redirect(target_url: str) -> HTMLResponse:
     return HTMLResponse(content=body)
 
 
+@app.post("/internal/admin-key")
+def receive_admin_key(payload: dict, x_sync_secret: str = Header(default="")):
+    """
+    Called by Open WebUI's backend (POST /api/v1/research-embed/sync-entry-service),
+    itself triggered by the "Connect Entry Service" button in Admin Panel >
+    Settings > Research Embed. Not reachable from outside the Docker network
+    in a normal deployment -- Caddyfile.production only proxies /enter* to
+    this service, nothing else -- but gated by a shared secret anyway as
+    defense in depth in case that routing assumption ever changes.
+    """
+    if not ENTRY_SERVICE_SYNC_SECRET:
+        # In practice this should be unreachable -- the module-level setup
+        # above either has a secret by now or already raised RuntimeError at
+        # import time -- but kept as a defensive guard in case that logic is
+        # ever changed to fail softer.
+        raise HTTPException(
+            status_code=503,
+            detail="ENTRY_SERVICE_SYNC_SECRET could not be determined on the "
+            "entry service -- check the `shared-secret` Docker volume is "
+            "mounted, or set ENTRY_SERVICE_SYNC_SECRET directly as an env var.",
+        )
+    if not secrets.compare_digest(x_sync_secret, ENTRY_SERVICE_SYNC_SECRET):
+        raise HTTPException(status_code=403, detail="Invalid sync secret.")
+
+    api_key = payload.get("api_key", "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing api_key.")
+
+    set_admin_key(api_key)
+    return JSONResponse({"status": "ok"})
+
+
 @app.get("/enter")
 def enter(request: Request):
+    if not is_admin_key_configured():
+        return PlainTextResponse(
+            "This Open WebUI instance hasn't been connected to its entry "
+            "service yet. An admin needs to log in, go to Admin Panel > "
+            "Settings > Research Embed, and click 'Connect Entry Service'.",
+            status_code=503,
+        )
+
     live = get_live_config()
 
     participant_id_param = live["RESEARCH_EMBED_PARTICIPANT_ID_PARAM"]

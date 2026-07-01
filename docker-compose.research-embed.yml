@@ -6,10 +6,31 @@
 # Usage:
 #   docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml up -d
 #
+# Zero-touch bootstrap: you do NOT need to set anything beyond DOMAIN to
+# bring this stack up. Just:
+#   1. docker compose ... up -d
+#   2. Open the site, create your admin account through the normal onboarding
+#      screen.
+#   3. Admin Panel > Settings > Research Embed > click "Connect Entry
+#      Service". That's it -- no .env editing, no restart. See
+#      backend/open_webui/routers/research_embed.py's /sync-entry-service
+#      and entry-service/entry_service.py's /internal/admin-key for how.
+#
 # Required in your .env file (see .env.research-embed.example):
-#   DOMAIN                     -- the public hostname Caddy serves, e.g. chat.yourdomain.edu
-#   OPEN_WEBUI_ADMIN_API_KEY   -- generate in Admin Panel > Settings > Account > API Keys
-#                                 *after* your admin account exists (see Part 3 setup notes)
+#   DOMAIN  -- the public hostname Caddy serves, e.g. chat.yourdomain.edu
+#
+# ENTRY_SERVICE_SYNC_SECRET authenticates the "Connect Entry Service" push
+# above, but you don't need to set it: both containers auto-generate and
+# share one via the `shared-secret` volume below the first time either side
+# needs it (see _get_or_create_shared_secret in both research_embed.py and
+# entry_service.py). Set it explicitly in .env only if you want a fixed,
+# known value for a scripted/advanced deployment -- it takes priority over
+# the auto-generated one if present.
+#
+# OPEN_WEBUI_ADMIN_API_KEY is similarly OPTIONAL -- only needed for
+# scripted/advanced deployments that want to skip the "Connect Entry
+# Service" button entirely by pre-supplying a key (it takes priority over
+# anything pushed via the button).
 #
 # Everything else (model choice, seed message, participant ID format,
 # allowed embed origin) is configured from Admin Panel > Settings >
@@ -25,21 +46,53 @@
 #     rejected.
 
 services:
-  # NOTE: Compose merges list fields (like the base file's `ports:` on
-  # open-webui) across -f files by CONCATENATING them, not replacing them --
-  # an empty `ports: []` override here would silently do nothing, leaving
-  # :3000 exposed. If you want Caddy to be the only public entry point,
-  # remove or comment out the `ports:` line under open-webui in the base
-  # docker-compose.yaml directly instead of trying to override it here.
+  open-webui:
+    # The base compose file tags this service's build output
+    # ghcr.io/open-webui/open-webui:main -- the exact name of the real
+    # upstream image. Building your fork with that file as-is would silently
+    # tag your local build with upstream's own image name, risking it
+    # overwriting (or being confused with) an actual pulled upstream image
+    # in your local Docker cache. `image:` is a scalar field, so unlike the
+    # `ports:` list note below, Compose *does* cleanly replace it here.
+    image: open-webui-hci-studies:latest
+
+    # NOTE: Compose merges list fields (like the base file's `ports:` on
+    # open-webui) across -f files by CONCATENATING them, not replacing them --
+    # an empty `ports: []` override here would silently do nothing, leaving
+    # :3000 exposed. If you want Caddy to be the only public entry point,
+    # remove or comment out the `ports:` line under open-webui in the base
+    # docker-compose.yaml directly instead of trying to override it here.
+    #
+    # This same list-concatenation behavior is what makes it safe to add
+    # `environment:` here too -- it appends to the base file's OLLAMA_BASE_URL
+    # / WEBUI_SECRET_KEY entries rather than replacing them.
+    environment:
+      - ENTRY_SERVICE_BASE_URL=http://entry-service:9000
+      # Optional override -- see the "Zero-touch bootstrap" note above. The
+      # `:-` default (rather than a bare `${ENTRY_SERVICE_SYNC_SECRET}`) is
+      # what stops Compose from printing a "variable is not set" warning when
+      # you haven't set one, since leaving it unset is the normal case now.
+      - ENTRY_SERVICE_SYNC_SECRET=${ENTRY_SERVICE_SYNC_SECRET:-}
+    volumes:
+      # Where open-webui and entry-service auto-negotiate the shared sync
+      # secret on first boot -- see the "Zero-touch bootstrap" note above.
+      - shared-secret:/shared
 
   entry-service:
     build: ./entry-service
     container_name: entry-service
     environment:
       - OPEN_WEBUI_BASE_URL=http://open-webui:8080
-      - OPEN_WEBUI_ADMIN_API_KEY=${OPEN_WEBUI_ADMIN_API_KEY}
+      - ENTRY_SERVICE_SYNC_SECRET=${ENTRY_SERVICE_SYNC_SECRET:-}
+      # Optional -- see the zero-touch bootstrap note at the top of this file.
+      # Defaults to empty rather than failing compose if you haven't set one;
+      # entry_service.py treats "no key yet" as a normal, expected startup
+      # state and /enter says so clearly until you click "Connect Entry
+      # Service" (or set this directly, for scripted/advanced deployments).
+      - OPEN_WEBUI_ADMIN_API_KEY=${OPEN_WEBUI_ADMIN_API_KEY:-}
     volumes:
       - entry-data:/data
+      - shared-secret:/shared
     depends_on:
       - open-webui
     restart: unless-stopped
@@ -47,9 +100,19 @@ services:
   caddy:
     image: caddy:2
     container_name: caddy
+    # Remapped off 80/443 -- this host already runs nginx-proxy-manager as
+    # its main reverse proxy, which holds those ports for other services.
+    # Caddy's own internal listeners are still :80/:443 inside the
+    # container; only the host-side mapping changed, so this is purely a
+    # "which port do you type in the browser" difference, not a Caddyfile
+    # change. When you're ready to put this on its real public domain,
+    # either free up 80/443 for Caddy, or -- probably the better fit for
+    # this host long-term -- skip Caddy and add a Proxy Host in
+    # nginx-proxy-manager instead, with the same /enter* -> entry-service,
+    # everything else -> open-webui routing logic as Caddyfile.production.
     ports:
-      - '80:80'
-      - '443:443'
+      - '8090:80'
+      - '8453:443'
     environment:
       - DOMAIN=${DOMAIN}
     volumes:
@@ -65,3 +128,6 @@ volumes:
   entry-data: {}
   caddy-data: {}
   caddy-config: {}
+  # Tiny volume holding a single auto-generated file (the shared sync
+  # secret) -- see the "Zero-touch bootstrap" note at the top of this file.
+  shared-secret: {}

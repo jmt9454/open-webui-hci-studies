@@ -57,6 +57,36 @@ export const updateResearchEmbedConfig = async (token: string, config: object) =
 	return res;
 };
 
+export const syncEntryService = async (token: string, apiKey: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/research-embed/sync-entry-service`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({
+			api_key: apiKey
+		})
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.log(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
 export const getResearchEmbedCode = async (token: string) => {
 	let error = null;
 

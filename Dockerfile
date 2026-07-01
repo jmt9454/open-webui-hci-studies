@@ -31,6 +31,13 @@ RUN npm ci
 
 COPY . .
 ENV APP_BUILD_HASH=${BUILD_HASH}
+# Vite's production build of this app (plus the pyodide packaging step) is
+# memory-hungry enough to OOM Node's default heap ceiling inside a
+# constrained container, well before the host itself runs out of RAM.
+# Raising it here fixes the build regardless of the host's Docker memory
+# settings; if it still OOMs, the container's total memory limit (Docker
+# Desktop / WSL2's .wslconfig) is the next thing to raise.
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN npm run build
 
 ######## WebUI backend ########
