@@ -60,6 +60,15 @@ Embed**, no redeploy needed.
    docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml up -d
    ```
 
+   If you've brought this stack up before (e.g. while testing), run `down`
+   first as a habit -- it's a no-op if nothing's running, and it prevents the
+   most common cause of the port-80-already-in-use error below (a leftover
+   container from an earlier run that was never torn down):
+
+   ```
+   docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml down
+   ```
+
 4. Open `https://localhost` (local) or `https://your-domain` (real deploy)
    and create your admin account through the normal onboarding screen.
    (Local testing over `https://localhost` will show a browser warning
@@ -168,11 +177,25 @@ other system storing human-subjects data:
 - **`/enter` returns a 503 saying "this study isn't configured yet"** -- no
   model has been picked and saved in Admin Panel > Settings > Research
   Embed.
-- **Port 80/443 already in use** -- something else on your host (another
-  reverse proxy, etc.) already binds those ports. Either free them up for
-  Caddy, or remap the ports in `docker-compose.research-embed.yml` and put a
-  matching entry in your existing reverse proxy instead (see the comment
-  above the `caddy` service in that file).
+- **Port 80/443 already in use** (e.g. `Bind for 0.0.0.0:80 failed: port is
+  already allocated`) -- something else already holds that port. Find out
+  what, in order:
+  1. `docker ps --filter "publish=80"` -- if this shows a container, it's a
+     leftover from an earlier run that was never `down`'d. Run
+     `docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml down`,
+     then `up -d` again.
+  2. If that's empty, it's a native process on the host, not Docker. On
+     Windows (PowerShell): `Get-NetTCPConnection -LocalPort 80 | Select-Object OwningProcess`,
+     then `Get-Process -Id <PID>` to see what it is (IIS / "World Wide Web
+     Publishing Service" is a common default-enabled culprit). On
+     Mac/Linux: `sudo lsof -i :80`.
+  3. Stop or disable whatever that turns out to be, or -- only if you
+     already have another reverse proxy fronting this host -- remap the
+     ports in `docker-compose.research-embed.yml` and forward from your
+     existing proxy instead (see the comment above the `caddy` service in
+     that file). Don't do this for a real deployment relying on Caddy's
+     automatic HTTPS: the Let's Encrypt HTTP-01 challenge needs Caddy
+     reachable on the real port 80.
 
 ## Customizing / running your own fork
 
