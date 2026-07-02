@@ -2036,6 +2036,7 @@
 								{history}
 								{taskIds}
 								{selectedModels}
+								{chatOnly}
 								bind:files
 								bind:prompt
 								bind:autoScroll

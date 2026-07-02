@@ -340,6 +340,85 @@ def find_existing_chat_id(token: str):
     return chats[0]["id"] if chats else None
 
 
+# ---- Duplicate-chat race mitigation ----
+#
+# The chat itself isn't created by this service -- it's created lazily,
+# client-side, by the browser after we redirect a first-time visitor to
+# "/?models=<id>&q=<seed>" (see the module docstring for why we can't
+# pre-create it server-side instead: Chat.svelte's submitPrompt() would fork
+# a second, orphaned chat). That leaves a real window: if /enter gets hit a
+# second time for the same participant before the browser has actually
+# saved that first chat, find_existing_chat_id() legitimately finds nothing
+# and this service sends them down the "first visit" path again, creating a
+# second chat. Observed in practice from a survey iframe apparently loading
+# /enter twice in immediate succession (same client connection, back-to-back
+# in the access log).
+#
+# We can't make entry-service *wait* for the browser to finish creating the
+# chat -- that happens after our HTTP response is already sent, in a
+# separate process we have no handle on. What we *can* do is notice "another
+# /enter for this same participant just happened a moment ago" and, in that
+# specific case only, retry the chats/list check a few times with short
+# pauses before giving up and creating a new chat. This closes the window
+# for near-simultaneous duplicate hits (the actual observed case) without
+# adding any latency to the normal, non-duplicate path.
+_RECENT_ENTER_LOCK = threading.Lock()
+_recent_enter_attempts: dict[str, float] = {}
+_RECENT_ENTER_WINDOW_SECONDS = 10.0
+_DUPLICATE_RETRY_ATTEMPTS = 8
+_DUPLICATE_RETRY_DELAY_SECONDS = 0.5
+
+
+def _is_likely_duplicate_enter(external_id: str) -> bool:
+    """Records this attempt and reports whether a previous /enter for the
+    same external_id was seen within _RECENT_ENTER_WINDOW_SECONDS. Also
+    opportunistically prunes old entries so this dict doesn't grow forever
+    over the life of the container."""
+    now = time.monotonic()
+    with _RECENT_ENTER_LOCK:
+        for key in [
+            k
+            for k, ts in _recent_enter_attempts.items()
+            if now - ts > _RECENT_ENTER_WINDOW_SECONDS
+        ]:
+            del _recent_enter_attempts[key]
+
+        last_seen = _recent_enter_attempts.get(external_id)
+        _recent_enter_attempts[external_id] = now
+
+    return last_seen is not None and (now - last_seen) <= _RECENT_ENTER_WINDOW_SECONDS
+
+
+def find_chat_id_for_new_or_returning_participant(token: str, external_id: str):
+    """Wraps find_existing_chat_id() with the retry described above, only
+    when a near-duplicate /enter for this participant was just observed."""
+    chat_id = find_existing_chat_id(token)
+    if chat_id:
+        return chat_id
+
+    if not _is_likely_duplicate_enter(external_id):
+        return None
+
+    for _ in range(_DUPLICATE_RETRY_ATTEMPTS):
+        time.sleep(_DUPLICATE_RETRY_DELAY_SECONDS)
+        chat_id = find_existing_chat_id(token)
+        if chat_id:
+            log.info(
+                "Found chat for %s on retry after a near-duplicate /enter hit "
+                "-- avoided creating a second chat.",
+                external_id,
+            )
+            return chat_id
+
+    # Genuinely nothing there after ~4s of retrying -- either the first
+    # attempt's chat creation actually failed (e.g. the participant closed
+    # the tab before the seed message finished sending), or this really is
+    # two deliberate, spaced-out visits that both happen to race past each
+    # other's chat-list check. Either way, fall through to creating a normal
+    # first-visit chat rather than blocking the participant indefinitely.
+    return None
+
+
 def clear_and_redirect(target_url: str) -> HTMLResponse:
     """Clear any stale localStorage session before handing off, then send the
     browser to `target_url` (the token itself is only ever transmitted in a
@@ -442,7 +521,7 @@ def enter(request: Request):
         conn.close()
 
     token = sign_in(email, password)
-    chat_id = find_existing_chat_id(token)
+    chat_id = find_chat_id_for_new_or_returning_participant(token, external_id)
 
     if chat_id:
         # Returning participant -- straight back to their one chat, no reseed.

@@ -58,6 +58,19 @@
 
 	export let transparentBackground = false;
 
+	// Research embed: when true (passed down from Chat.svelte's chatOnly),
+	// always treat Enter as send regardless of the $mobile/touch-capability
+	// heuristic below. That heuristic exists to avoid hijacking Enter on
+	// real touchscreen devices where users expect a dedicated send button,
+	// but it also fires as a false positive purely from the embed iframe
+	// being narrower than the mobile breakpoint (see $mobile in
+	// src/lib/stores) even on an ordinary desktop browser -- which is what
+	// was breaking Enter-to-send for participants. Standard embedded chat
+	// widget convention (Intercom, Drift, etc.) is Enter-always-sends
+	// regardless of device, which is also simpler and more predictable for
+	// a single-purpose research embed.
+	export let chatOnly = false;
+
 	export let onChange: Function = () => {};
 	export let createMessagePair: Function;
 	export let stopResponse: Function;
@@ -613,13 +626,14 @@
 												bind:value={prompt}
 												id="chat-input"
 												messageInput={true}
-												shiftEnter={!($settings?.ctrlEnterToSend ?? false) &&
-													(!$mobile ||
-														!(
-															'ontouchstart' in window ||
-															navigator.maxTouchPoints > 0 ||
-															navigator.msMaxTouchPoints > 0
-														))}
+												shiftEnter={chatOnly ||
+													(!($settings?.ctrlEnterToSend ?? false) &&
+														(!$mobile ||
+															!(
+																'ontouchstart' in window ||
+																navigator.maxTouchPoints > 0 ||
+																navigator.msMaxTouchPoints > 0
+															)))}
 												placeholder={placeholder ? placeholder : $i18n.t('Send a Message')}
 												largeTextAsFile={$settings?.largeTextAsFile ?? false}
 												autocomplete={$config?.features?.enable_autocomplete_generation &&
@@ -739,6 +753,7 @@
 														}
 													} else {
 														if (
+															chatOnly ||
 															!$mobile ||
 															!(
 																'ontouchstart' in window ||
@@ -922,6 +937,7 @@
 													}
 												} else {
 													if (
+														chatOnly ||
 														!$mobile ||
 														!(
 															'ontouchstart' in window ||

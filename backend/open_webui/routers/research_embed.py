@@ -14,7 +14,7 @@ import secrets
 
 import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 
 from open_webui.utils.auth import get_admin_user
 
@@ -111,35 +111,18 @@ class ResearchEmbedConfigForm(BaseModel):
     RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN: str
     RESEARCH_EMBED_ALLOWED_ORIGIN: str
 
-    @field_validator("RESEARCH_EMBED_PARTICIPANT_ID_REGEX")
-    @classmethod
-    def validate_regex(cls, value: str) -> str:
-        if value:
-            try:
-                re.compile(value)
-            except re.error as e:
-                raise ValueError(f"Not a valid regular expression: {e}")
-        return value
-
-    @field_validator("RESEARCH_EMBED_PARTICIPANT_ID_PARAM")
-    @classmethod
-    def validate_param_name(cls, value: str) -> str:
-        if value and not re.match(r"^[A-Za-z0-9_-]+$", value):
-            raise ValueError(
-                "Participant ID param name should only contain letters, numbers, "
-                "underscores, and hyphens (it becomes a URL query parameter name)."
-            )
-        return value
-
-    @field_validator("RESEARCH_EMBED_ALLOWED_ORIGIN")
-    @classmethod
-    def validate_origin(cls, value: str) -> str:
-        if value and not re.match(r"^https?://[^/\s]+$", value):
-            raise ValueError(
-                "Allowed origin should look like https://yourorg.qualtrics.com "
-                "(scheme + host, no trailing slash or path)."
-            )
-        return value
+    # NOTE: deliberately no @field_validator decorators here. Pydantic
+    # field validators run during FastAPI's automatic request-body parsing,
+    # *before* our route handler ever executes -- a raised ValueError there
+    # gets turned into FastAPI's default 422 response, whose `detail` is a
+    # LIST of structured error objects, not a plain string. The frontend's
+    # fetch wrappers (src/lib/apis/*) universally assume `err.detail` is a
+    # string they can drop into a toast (`toast.error(`${error}`)`), which
+    # is true for every other HTTPException in this codebase but renders a
+    # list of objects as a useless "[object Object]". Validating manually
+    # inside the handler below and raising HTTPException(400, detail=<str>)
+    # keeps us consistent with that existing convention instead of being the
+    # one endpoint that breaks it.
 
 
 def _config_to_dict(request: Request) -> dict:
@@ -158,12 +141,49 @@ async def get_research_embed_config(request: Request, user=Depends(get_admin_use
     return _config_to_dict(request)
 
 
+def _validate_config_form(form_data: ResearchEmbedConfigForm) -> None:
+    """Raises HTTPException(400, detail=<plain string>) on the first invalid
+    field. See the comment on ResearchEmbedConfigForm for why this isn't
+    done via @field_validator instead."""
+    if form_data.RESEARCH_EMBED_PARTICIPANT_ID_REGEX:
+        try:
+            re.compile(form_data.RESEARCH_EMBED_PARTICIPANT_ID_REGEX)
+        except re.error as e:
+            raise HTTPException(
+                status_code=400, detail=f"Not a valid regular expression: {e}"
+            )
+
+    if form_data.RESEARCH_EMBED_PARTICIPANT_ID_PARAM and not re.match(
+        r"^[A-Za-z0-9_-]+$", form_data.RESEARCH_EMBED_PARTICIPANT_ID_PARAM
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Participant ID param name should only contain letters, numbers, "
+                "underscores, and hyphens (it becomes a URL query parameter name)."
+            ),
+        )
+
+    if form_data.RESEARCH_EMBED_ALLOWED_ORIGIN and not re.match(
+        r"^https?://[^/\s]+$", form_data.RESEARCH_EMBED_ALLOWED_ORIGIN
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Allowed origin should look like https://yourorg.qualtrics.com "
+                "(scheme + host, no trailing slash or path)."
+            ),
+        )
+
+
 @router.post("/config", response_model=ResearchEmbedConfigForm)
 async def set_research_embed_config(
     request: Request,
     form_data: ResearchEmbedConfigForm,
     user=Depends(get_admin_user),
 ):
+    _validate_config_form(form_data)
+
     request.app.state.config.RESEARCH_EMBED_MODEL_ID = form_data.RESEARCH_EMBED_MODEL_ID
     request.app.state.config.RESEARCH_EMBED_SEED_MESSAGE = (
         form_data.RESEARCH_EMBED_SEED_MESSAGE

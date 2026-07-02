@@ -50,6 +50,25 @@
 
 	setContext('i18n', i18n);
 
+	// --- Research embed: chat-only mode ---
+	// Same detection as src/routes/(app)/+layout.svelte, duplicated here
+	// because this root layout is where desktop/in-app "new message"
+	// notifications fire (below), and participants embedded in a survey
+	// iframe should never see those -- a popup naming the chat and
+	// previewing message content mid-survey has no place in a minimal,
+	// single-purpose embed.
+	// NOTE: PARTICIPANT_EMAIL_DOMAIN is hardcoded in both places rather than
+	// read from the admin-configurable Research Embed setting -- if you
+	// change "Participant Email Domain" in Admin Panel > Settings > Research
+	// Embed away from the default, update it here too (and in
+	// (app)/+layout.svelte), or chat-only detection silently breaks for both
+	// notifications and the sidebar/navbar hiding.
+	const PARTICIPANT_EMAIL_DOMAIN = 'participants.local';
+	$: isParticipant = $user?.email?.endsWith('@' + PARTICIPANT_EMAIL_DOMAIN) ?? false;
+	$: staffPreview = $page.url.searchParams.get('chatOnly') === 'true';
+	$: chatOnly = isParticipant || staffPreview;
+	// --- end research embed ---
+
 	const bc = new BroadcastChannel('active-tab-channel');
 
 	let loaded = false;
@@ -258,7 +277,7 @@
 			if (type === 'chat:completion') {
 				const { done, content, title } = data;
 
-				if (done) {
+				if (done && !chatOnly) {
 					if ($isLastActiveTab) {
 						if ($settings?.notificationEnabled ?? false) {
 							new Notification(`${title} | Open WebUI`, {
@@ -407,7 +426,7 @@
 			const type = event?.data?.type ?? null;
 			const data = event?.data?.data ?? null;
 
-			if (type === 'message') {
+			if (type === 'message' && !chatOnly) {
 				if ($isLastActiveTab) {
 					if ($settings?.notificationEnabled ?? false) {
 						new Notification(`${data?.user?.name} (#${event?.channel?.name}) | Open WebUI`, {

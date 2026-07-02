@@ -26,6 +26,12 @@
 
 	let connectingEntryService = false;
 
+	// Returns true/false so the caller (the form's submit handler below) only
+	// fires the generic "Settings saved successfully!" toast (saveHandler(),
+	// passed in from the parent Settings page) when the save actually
+	// worked -- previously it ran unconditionally, so a validation error on
+	// this form still showed a misleading success toast alongside the real
+	// error.
 	const submitHandler = async () => {
 		const res = await updateResearchEmbedConfig(localStorage.token, config).catch((error) => {
 			toast.error(`${error}`);
@@ -37,7 +43,10 @@
 			// The embed code depends on the saved config (model, param name,
 			// allowed origin), so refresh it after every successful save.
 			await loadEmbedCode();
+			return true;
 		}
+
+		return false;
 	};
 
 	const loadEmbedCode = async () => {
@@ -98,8 +107,10 @@
 <form
 	class="flex flex-col h-full justify-between space-y-3 text-sm"
 	on:submit|preventDefault={async () => {
-		await submitHandler();
-		saveHandler();
+		const saved = await submitHandler();
+		if (saved) {
+			saveHandler();
+		}
 	}}
 >
 	<div class=" space-y-3 overflow-y-scroll scrollbar-hidden h-full">
