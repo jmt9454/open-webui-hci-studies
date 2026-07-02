@@ -57,22 +57,25 @@
 		// service over the internal Docker network -- no .env editing, no
 		// container restart. See backend/open_webui/routers/research_embed.py
 		// and entry-service/entry_service.py's POST /internal/admin-key.
+		// createAPIKey() returns the key as a bare string (see
+		// src/lib/apis/auths/index.ts), not an object -- don't check
+		// `keyRes?.api_key` here, keyRes IS the api_key.
 		const keyRes = await createAPIKey(localStorage.token).catch((error) => {
 			toast.error(`${error}`);
 			return null;
 		});
 
-		if (keyRes?.api_key) {
-			const syncRes = await syncEntryService(localStorage.token, keyRes.api_key).catch(
-				(error) => {
-					toast.error(`${error}`);
-					return null;
-				}
-			);
+		if (keyRes) {
+			const syncRes = await syncEntryService(localStorage.token, keyRes).catch((error) => {
+				toast.error(`${error}`);
+				return null;
+			});
 
 			if (syncRes) {
 				toast.success($i18n.t('Entry service connected.'));
 			}
+		} else {
+			toast.error($i18n.t('Failed to generate an API key for this account.'));
 		}
 
 		connectingEntryService = false;
