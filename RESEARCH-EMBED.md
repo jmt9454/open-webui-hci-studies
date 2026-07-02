@@ -11,7 +11,7 @@ study running, start at [Quickstart](#quickstart) below.
 
 ## How it works, briefly
 
-Three pieces run together behind one reverse proxy (Caddy):
+Two required pieces, plus an optional third for routing/HTTPS:
 
 - **Open WebUI** (this fork) -- the actual chat app. Runs in "chat-only"
   mode for participant accounts, detected by email domain.
@@ -19,9 +19,13 @@ Three pieces run together behind one reverse proxy (Caddy):
   `/enter?pid=...`, it creates (or looks up) that participant's account,
   signs them in, and redirects them straight into their one chat. It talks
   to Open WebUI only through its normal public REST API.
-- **Caddy** -- reverse proxy, routes `/enter*` to entry-service and
-  everything else to Open WebUI, and gets you a real HTTPS certificate
-  automatically once you have a real domain.
+- **Caddy** (optional, `docker-compose.caddy.yml`) -- reverse proxy, routes
+  `/enter*` to entry-service and everything else to Open WebUI, and gets you
+  a real HTTPS certificate automatically once you have a real domain. Skip
+  this file if you already run your own reverse proxy (nginx-proxy-manager,
+  Traefik, another Caddy instance, a cloud load balancer) -- see
+  [Already running your own reverse proxy?](#already-running-your-own-reverse-proxy)
+  below.
 
 Everything you'd actually want to change for a study -- which model,
 the seed message, the participant ID format, which domain is allowed to
@@ -37,6 +41,9 @@ Embed**, no redeploy needed.
   it beforehand.
 - For a real deployment: a domain name pointed at your server. For local
   testing, you don't need one at all.
+- Either ports 80 and 443 free on the host (for the built-in Caddy reverse
+  proxy), **or** your own reverse proxy already running -- see
+  [Already running your own reverse proxy?](#already-running-your-own-reverse-proxy).
 
 ## Quickstart
 
@@ -54,7 +61,21 @@ Embed**, no redeploy needed.
    comments in `.env.research-embed.example` and
    `docker-compose.research-embed.yml`.
 
-3. Bring the stack up. This pulls prebuilt images (no local build, no wait):
+3. Bring the stack up. This pulls prebuilt images (no local build, no wait).
+
+   If this host has no reverse proxy already running on it (the common
+   case for a fresh VM), include `docker-compose.caddy.yml` and Caddy
+   handles HTTPS for you automatically:
+
+   ```
+   docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml -f docker-compose.caddy.yml up -d
+   ```
+
+   If this host already runs its own reverse proxy (nginx-proxy-manager,
+   Traefik, another Caddy instance, a cloud load balancer -- common on a
+   shared or homelab-style server), omit that third file instead and see
+   [Already running your own reverse proxy?](#already-running-your-own-reverse-proxy)
+   below for how to wire it up:
 
    ```
    docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml up -d
@@ -62,11 +83,11 @@ Embed**, no redeploy needed.
 
    If you've brought this stack up before (e.g. while testing), run `down`
    first as a habit -- it's a no-op if nothing's running, and it prevents the
-   most common cause of the port-80-already-in-use error below (a leftover
-   container from an earlier run that was never torn down):
+   most common self-inflicted cause of a port-already-in-use error (a
+   leftover container from an earlier run that was never torn down):
 
    ```
-   docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml down
+   docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml -f docker-compose.caddy.yml down
    ```
 
 4. Open `https://localhost` (local) or `https://your-domain` (real deploy)
@@ -98,6 +119,12 @@ without touching Docker at all.
 
 ## Local testing vs. real deployment
 
+This section applies when you're using `docker-compose.caddy.yml` (the
+built-in reverse proxy). If you're fronting this with your own reverse
+proxy instead, see
+[Already running your own reverse proxy?](#already-running-your-own-reverse-proxy)
+-- your proxy's own HTTPS/domain settings apply there, not `DOMAIN` below.
+
 `DOMAIN` controls what Caddy does for HTTPS:
 
 - **`localhost`** (or another private name) -- Caddy issues itself a
@@ -110,7 +137,46 @@ without touching Docker at all.
   actually yours) -- Caddy will try real certificate issuance, fail, and
   retry indefinitely. This is the most common reason the stack appears to
   hang on first boot. If this happens, fix `DOMAIN` in `.env` and restart:
-  `docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml up -d --force-recreate caddy`.
+  `docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml -f docker-compose.caddy.yml up -d --force-recreate caddy`.
+
+## Already running your own reverse proxy?
+
+If this host already has a reverse proxy on ports 80/443 -- nginx-proxy-manager,
+Traefik, another Caddy instance, a cloud load balancer -- skip
+`docker-compose.caddy.yml` entirely:
+
+```
+docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml up -d
+```
+
+Without Caddy in the mix, `open-webui` and `entry-service` each publish a
+plain-HTTP port straight to the host instead:
+
+- `open-webui` on `${OPEN_WEBUI_PORT-3000}` (from `docker-compose.yaml`)
+- `entry-service` on `${ENTRY_SERVICE_PORT-9000}` (from
+  `docker-compose.research-embed.yml`)
+
+Point your existing reverse proxy at those, splitting by path the same way
+`Caddyfile.production` does: `/enter*` goes to entry-service, everything
+else goes to open-webui. Your proxy handles TLS/HTTPS itself in this setup
+(`DOMAIN` and Caddy's automatic Let's Encrypt cert are irrelevant here --
+don't set `DOMAIN` unless you also bring `docker-compose.caddy.yml` back).
+
+**Example: nginx-proxy-manager.** Create one Proxy Host for your domain
+pointing at `open-webui`'s host and port (Forward Hostname/IP = your
+server's address, Forward Port = `3000`). Then add a Custom Location on
+that same Proxy Host for path `/enter` (with "include subdirectories" /
+a trailing wildcard, depending on your NPM version) forwarding to the same
+host on port `9000`. Enable SSL on the Proxy Host as you would for any other
+service -- NPM's own Let's Encrypt integration handles the certificate; you
+don't need Caddy for that.
+
+The CSP header that lets the embed render inside your survey platform's
+iframe (`Content-Security-Policy: frame-ancestors`) is set by Open WebUI's
+own backend based on the **Allowed Embed Origin** setting in Admin Panel >
+Settings > Research Embed, not by Caddy -- so this works identically whether
+Caddy, your own reverse proxy, or no proxy at all (local testing) is in
+front.
 
 ## Admin settings reference
 
@@ -180,22 +246,22 @@ other system storing human-subjects data:
 - **Port 80/443 already in use** (e.g. `Bind for 0.0.0.0:80 failed: port is
   already allocated`) -- something else already holds that port. Find out
   what, in order:
-  1. `docker ps --filter "publish=80"` -- if this shows a container, it's a
-     leftover from an earlier run that was never `down`'d. Run
-     `docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml down`,
-     then `up -d` again.
-  2. If that's empty, it's a native process on the host, not Docker. On
-     Windows (PowerShell): `Get-NetTCPConnection -LocalPort 80 | Select-Object OwningProcess`,
-     then `Get-Process -Id <PID>` to see what it is (IIS / "World Wide Web
-     Publishing Service" is a common default-enabled culprit). On
-     Mac/Linux: `sudo lsof -i :80`.
-  3. Stop or disable whatever that turns out to be, or -- only if you
-     already have another reverse proxy fronting this host -- remap the
-     ports in `docker-compose.research-embed.yml` and forward from your
-     existing proxy instead (see the comment above the `caddy` service in
-     that file). Don't do this for a real deployment relying on Caddy's
-     automatic HTTPS: the Let's Encrypt HTTP-01 challenge needs Caddy
-     reachable on the real port 80.
+  1. `docker ps --filter "publish=80"` -- if this shows a container, check
+     what it is. If it's a leftover `caddy` container from an earlier run of
+     *this* stack that was never `down`'d, run
+     `docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml -f docker-compose.caddy.yml down`,
+     then `up -d` again. If it's something else entirely (nginx-proxy-manager,
+     Traefik, another Caddy instance, etc.) -- that's a real, permanent
+     reverse proxy already running on this host, not a leftover. Don't fight
+     it for the port: skip `docker-compose.caddy.yml` and follow
+     [Already running your own reverse proxy?](#already-running-your-own-reverse-proxy)
+     instead.
+  2. If step 1 shows nothing, it's a native process on the host, not Docker.
+     On Windows (PowerShell):
+     `Get-Process -Id (Get-NetTCPConnection -LocalPort 80).OwningProcess`
+     (IIS / "World Wide Web Publishing Service" is a common default-enabled
+     culprit). On Mac/Linux: `sudo lsof -i :80`. Stop or disable whatever
+     that turns out to be, or free up 80/443 for Caddy some other way.
 
 ## Customizing / running your own fork
 
@@ -228,8 +294,12 @@ docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml build
 - `src/routes/(app)/+layout.svelte` and `src/lib/components/chat/Chat.svelte`
   -- where chat-only mode (hiding the sidebar/navbar/settings) is
   implemented, gated on participant email domain.
-- `docker-compose.research-embed.yml`, `Caddyfile.production` -- the
-  deployment topology.
+- `docker-compose.research-embed.yml` -- open-webui + entry-service topology
+  (required). `docker-compose.caddy.yml` -- the optional built-in reverse
+  proxy, separate so it can be skipped if you already run your own (see
+  [Already running your own reverse proxy?](#already-running-your-own-reverse-proxy)).
+  `Caddyfile.production` -- Caddy's routing config, only relevant if you're
+  using `docker-compose.caddy.yml`.
 - `futurefeature.md` -- a written-up, not-yet-implemented proposal for
   per-model embed configuration (running multiple studies/conditions on one
   instance).

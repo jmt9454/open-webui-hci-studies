@@ -1,0 +1,55 @@
+# Optional: the built-in HTTPS reverse proxy for the research embed stack.
+#
+# Include this file (with a third -f flag) only if you do NOT already run
+# your own reverse proxy on this host. It binds host ports 80 and 443 and
+# gets you automatic HTTPS via Let's Encrypt for whatever DOMAIN you set in
+# .env -- see the "IMPORTANT -- what to put in DOMAIN" comment in
+# Caddyfile.production for the three DOMAIN scenarios.
+#
+# Usage (no existing reverse proxy on this host):
+#   docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml -f docker-compose.caddy.yml up -d
+#
+# If you already have a reverse proxy running on 80/443 -- this is common
+# (nginx-proxy-manager, Traefik, another Caddy instance, a cloud load
+# balancer) -- adding this file WILL fail with something like:
+#   Bind for 0.0.0.0:80 failed: port is already allocated
+# In that case, skip this file entirely instead:
+#   docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml up -d
+# ...and point your EXISTING reverse proxy at this stack instead. open-webui
+# and entry-service both publish plain-HTTP ports to the host for exactly
+# this purpose (see the `ports:` entries in docker-compose.yaml and
+# docker-compose.research-embed.yml). Full wiring instructions, including a
+# worked nginx-proxy-manager example, are under "Already running your own
+# reverse proxy?" in RESEARCH-EMBED.md.
+#
+# Whichever path you're on, the split between routing (which path goes to
+# which service) and the CSP/frame-ancestors header (which iframe origins
+# are allowed to embed you) is intentional: routing is Caddy's job here (or
+# your own proxy's, if you skip this file), but the CSP header is set by
+# Open WebUI's own backend based on the Admin Panel > Settings > Research
+# Embed > Allowed Embed Origin setting -- so that part works identically no
+# matter which reverse proxy (or none, for local testing) sits in front.
+
+services:
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - ./Caddyfile.production:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      open-webui:
+        condition: service_healthy
+      entry-service:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  caddy-data: {}
+  caddy-config: {}

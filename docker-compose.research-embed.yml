@@ -1,17 +1,32 @@
-# Adds the entry service and Caddy reverse proxy on top of the base
-# docker-compose.yaml, without editing that file directly (keeps this
-# additive on top of upstream Open WebUI, so pulling future upstream compose
-# changes doesn't conflict with the research embed setup).
+# Adds the entry service on top of the base docker-compose.yaml, without
+# editing that file directly (keeps this additive on top of upstream Open
+# WebUI, so pulling future upstream compose changes doesn't conflict with
+# the research embed setup).
+#
+# Caddy (the built-in HTTPS reverse proxy) is NOT in this file -- it's a
+# separate, optional docker-compose.caddy.yml. That split exists because
+# plenty of hosts already run their own reverse proxy (nginx-proxy-manager,
+# Traefik, another Caddy instance, a cloud load balancer) on ports 80/443,
+# and this stack shouldn't fight that for the ports. See "Already running
+# your own reverse proxy?" in RESEARCH-EMBED.md.
 #
 # Usage:
-#   docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml up -d
+#   No existing reverse proxy on this host -- add docker-compose.caddy.yml
+#   too, and Caddy handles HTTPS for you automatically:
+#     docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml -f docker-compose.caddy.yml up -d
 #
-# That pulls prebuilt images from GHCR (see .github/workflows/research-embed-images.yml)
-# instead of building anything locally -- should take seconds, not minutes,
-# and has no risk of the frontend build's memory-hungry OOM crash.
+#   Already have your own reverse proxy -- omit docker-compose.caddy.yml,
+#   point your existing proxy at the plain-HTTP ports open-webui and
+#   entry-service publish below instead:
+#     docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml up -d
 #
-# Zero-touch bootstrap: you do NOT need to set anything beyond DOMAIN to
-# bring this stack up. Just:
+# Either way, this pulls prebuilt images from GHCR (see
+# .github/workflows/research-embed-images.yml) instead of building anything
+# locally -- should take seconds, not minutes, and has no risk of the
+# frontend build's memory-hungry OOM crash.
+#
+# Zero-touch bootstrap: you do NOT need to set anything (beyond DOMAIN, if
+# you're using docker-compose.caddy.yml) to bring this stack up. Just:
 #   1. docker compose ... up -d
 #   2. Open the site, create your admin account through the normal onboarding
 #      screen.
@@ -19,9 +34,6 @@
 #      Service". That's it -- no .env editing, no restart. See
 #      backend/open_webui/routers/research_embed.py's /sync-entry-service
 #      and entry-service/entry_service.py's /internal/admin-key for how.
-#
-# Required in your .env file (see .env.research-embed.example):
-#   DOMAIN  -- the public hostname Caddy serves, e.g. chat.yourdomain.edu
 #
 # ENTRY_SERVICE_SYNC_SECRET authenticates the "Connect Entry Service" push
 # above, but you don't need to set it: both containers auto-generate and
@@ -111,6 +123,15 @@ services:
     image: ghcr.io/jmt9454/open-webui-hci-studies-entry:latest
     build: ./entry-service
     container_name: entry-service
+    ports:
+      # Published so an EXISTING reverse proxy (if you're skipping
+      # docker-compose.caddy.yml) can route /enter* here directly, the same
+      # way it's already reachable at http://entry-service:9000 from inside
+      # the Docker network (that's how Caddy or any proxy on this network
+      # reaches it; this port mapping is only needed for a proxy running
+      # outside this Docker network, e.g. nginx-proxy-manager on the host).
+      # Change the host side if 9000 is already taken by something else.
+      - ${ENTRY_SERVICE_PORT-9000}:9000
     environment:
       - OPEN_WEBUI_BASE_URL=http://open-webui:8080
       - ENTRY_SERVICE_SYNC_SECRET=${ENTRY_SERVICE_SYNC_SECRET:-}
@@ -128,37 +149,8 @@ services:
         condition: service_started
     restart: unless-stopped
 
-  caddy:
-    image: caddy:2
-    container_name: caddy
-    # Standard 80/443 -- required for Caddy's automatic HTTPS (the ACME
-    # HTTP-01 challenge needs port 80 reachable from the internet) once
-    # DOMAIN is a real hostname. If something else on your host already
-    # binds 80/443 (another reverse proxy, etc.), either free up those ports
-    # for Caddy, or remap here (e.g. '8090:80' / '8453:443') and put a
-    # matching entry in your existing reverse proxy instead, forwarding
-    # /enter* -> entry-service:9000 and everything else -> open-webui:8080,
-    # same split as Caddyfile.production.
-    ports:
-      - '80:80'
-      - '443:443'
-    environment:
-      - DOMAIN=${DOMAIN}
-    volumes:
-      - ./Caddyfile.production:/etc/caddy/Caddyfile
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on:
-      open-webui:
-        condition: service_healthy
-      entry-service:
-        condition: service_healthy
-    restart: unless-stopped
-
 volumes:
   entry-data: {}
-  caddy-data: {}
-  caddy-config: {}
   # Tiny volume holding a single auto-generated file (the shared sync
   # secret) -- see the "Zero-touch bootstrap" note at the top of this file.
   shared-secret: {}
