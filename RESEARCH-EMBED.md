@@ -90,11 +90,26 @@ Embed**, no redeploy needed.
    docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml -f docker-compose.caddy.yml down
    ```
 
-4. Open `https://localhost` (local) or `https://your-domain` (real deploy)
-   and create your admin account through the normal onboarding screen.
+4. **Immediately** open `https://localhost` (local) or `https://your-domain`
+   (real deploy) and create your admin account through the normal onboarding
+   screen. Don't leave this step for later: signup is open to anyone until
+   the first account is created, and on a real public domain, automated
+   scanners find new domains and start probing them within minutes of DNS
+   resolving (you'll see this in `docker logs` -- it's normal background
+   internet noise, but it means someone else *could* complete the signup
+   form before you if you wait). The moment the first account is created,
+   Open WebUI automatically closes signup for everyone else -- no
+   `ENABLE_SIGNUP` env var or manual toggle needed, it's built into upstream
+   Open WebUI's own signup handler.
    (Local testing over `https://localhost` will show a browser warning
    about the certificate not being trusted -- that's expected, see
    [Local testing](#local-testing-vs-real-deployment) below; click through it.)
+
+   If you're deploying to a public droplet/VM and want to be extra safe
+   about that race, claim the account over an SSH tunnel instead of the
+   public URL: `ssh -L 3000:localhost:3000 you@your-server`, then open
+   `http://localhost:3000` locally and sign up there. Either path leads to
+   the same result once your account exists.
 
 5. Add a model connection: **Admin Panel > Settings > Connections**, add
    your OpenAI (or other) API key, same as any normal Open WebUI setup.
@@ -194,10 +209,13 @@ All under **Admin Panel > Settings > Research Embed**:
 
 ## Pre-launch checklist
 
-- **Public sign-up is disabled by default** in this deployment
-  (`ENABLE_SIGNUP=false` in `docker-compose.research-embed.yml`) so the only
-  way to get an account is through the entry service. Don't override this
-  unless you have a specific reason to.
+- **Confirm public sign-up is actually closed** before sending the embed
+  link to real participants: Admin Settings > General > "Enable New Sign
+  Ups" should be off. It closes itself automatically the moment your admin
+  account is created (built into upstream Open WebUI -- see the comment
+  above `ENABLE_SIGNUP` in `docker-compose.research-embed.yml` for why this
+  fork deliberately does NOT force it via an env var), but it's cheap
+  insurance to double check before going live.
 - **Set the Allowed Embed Origin** to your actual survey platform's domain
   before going live -- without it, most browsers refuse to render the embed
   at all.
@@ -237,6 +255,15 @@ other system storing human-subjects data:
   [Local testing](#local-testing-vs-real-deployment) above.
 - **"Model not selected" for participants** -- the model needs non-admin
   access control; see the checklist above.
+- **`POST /api/v1/auths/signup` returns 403, can't create the admin
+  account at all** -- something is forcing `ENABLE_SIGNUP=false` before the
+  first account exists. This fork's own compose files deliberately don't do
+  this (see the comment above `ENABLE_SIGNUP` in
+  `docker-compose.research-embed.yml`) -- if you're hitting this, check
+  whether you or something else set `ENABLE_SIGNUP=false` in your own
+  `.env` or a custom override, and remove it. Signup closes itself
+  automatically the instant the first account is created; it doesn't need
+  to be forced closed from the start.
 - **`/enter` returns a 503 saying the instance "hasn't been connected"** --
   you haven't clicked **Connect Entry Service** yet (or need to click it
   again after recreating the entry-service container/volume).
