@@ -213,6 +213,12 @@ type Config = {
 		enable_admin_chat_access: boolean;
 		enable_community_sharing: boolean;
 		enable_autocomplete_generation: boolean;
+		research_embed?: {
+			track_keystrokes: boolean;
+			track_temporal_delays: boolean;
+			track_visibility: boolean;
+			track_clipboard: boolean;
+		};
 	};
 	oauth: {
 		providers: {
