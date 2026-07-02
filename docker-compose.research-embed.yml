@@ -84,6 +84,16 @@ services:
     # upstream image name) with this fork's own image here.
     image: ghcr.io/jmt9454/open-webui-hci-studies:latest
 
+    # `container_name:` is also scalar, so this cleanly replaces the base
+    # file's hardcoded `open-webui` name. Needed on any host that already
+    # runs a container literally named `open-webui` (common -- it's
+    # upstream Open WebUI's own default container name too, so a shared
+    # research/lab server that already runs a general-purpose instance will
+    # collide with this fork's stack otherwise). Override
+    # OPEN_WEBUI_CONTAINER_NAME in .env if you need something else (e.g.
+    # running two different studies' stacks on the same host).
+    container_name: ${OPEN_WEBUI_CONTAINER_NAME-open-webui-research-embed}
+
     # NOTE: Compose merges list fields (like the base file's `ports:` on
     # open-webui) across -f files by CONCATENATING them, not replacing them --
     # an empty `ports: []` override here would silently do nothing, leaving

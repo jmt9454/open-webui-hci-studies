@@ -262,6 +262,17 @@ other system storing human-subjects data:
      (IIS / "World Wide Web Publishing Service" is a common default-enabled
      culprit). On Mac/Linux: `sudo lsof -i :80`. Stop or disable whatever
      that turns out to be, or free up 80/443 for Caddy some other way.
+- **`Conflict. The container name "/open-webui" is already in use`** -- a
+  container literally named `open-webui` already exists on this host. This
+  is common on a shared research/lab server that already runs a
+  general-purpose Open WebUI instance -- `open-webui` is upstream's own
+  default container name too. Check what it is first:
+  `docker ps -a --filter "name=open-webui" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"`.
+  If you can't remove it, set `OPEN_WEBUI_CONTAINER_NAME` in `.env` (see
+  `.env.research-embed.example`) instead of renaming or removing the
+  existing container. Also check its `Ports` column -- if it's already
+  using host port 3000, set `OPEN_WEBUI_PORT` in `.env` too, or `up -d` will
+  just trade this error for a port-already-allocated one.
 
 ## Customizing / running your own fork
 
