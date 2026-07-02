@@ -1,12 +1,23 @@
 """
-Admin-configurable settings for the research embed feature.
+Admin-configurable settings for the research embed feature, plus optional
+behavioral-tracking event ingest/export.
 
-This router only manages configuration (PersistentConfig-backed, so it
-survives restarts). It never touches participant accounts or chats directly
--- that's the standalone entry service's job, which reads this config via
-GET /config using its admin API key. See /entry-service/entry_service.py.
+Most of this router only manages configuration (PersistentConfig-backed, so
+it survives restarts) and never touches participant accounts or chats
+directly -- that's the standalone entry service's job, which reads this
+config via GET /config using its admin API key. See
+/entry-service/entry_service.py.
+
+The exception is the behavioral-tracking event endpoints near the bottom of
+this file (POST /events, GET /events/export): those ARE hit directly by
+participants' own browsers (authenticated as themselves, not the entry
+service), since that's where keystroke/visibility/clipboard events actually
+happen. See src/lib/utils/researchEmbedTracking.ts for the client side.
 """
 
+import csv
+import io
+import json
 import logging
 import os
 import re
@@ -14,9 +25,14 @@ import secrets
 
 import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from open_webui.utils.auth import get_admin_user
+from open_webui.utils.auth import get_admin_user, get_verified_user
+from open_webui.models.research_embed_events import (
+    ResearchEmbedEventBatchForm,
+    ResearchEmbedEvents,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -111,6 +127,15 @@ class ResearchEmbedConfigForm(BaseModel):
     RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN: str
     RESEARCH_EMBED_ALLOWED_ORIGIN: str
 
+    # Behavioral tracking toggles -- see the comment above the
+    # RESEARCH_EMBED_TRACK_* PersistentConfig entries in config.py. Default
+    # False; only enable once your IRB protocol / consent language covers
+    # the specific feature.
+    RESEARCH_EMBED_TRACK_KEYSTROKES: bool
+    RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS: bool
+    RESEARCH_EMBED_TRACK_VISIBILITY: bool
+    RESEARCH_EMBED_TRACK_CLIPBOARD: bool
+
     # NOTE: deliberately no @field_validator decorators here. Pydantic
     # field validators run during FastAPI's automatic request-body parsing,
     # *before* our route handler ever executes -- a raised ValueError there
@@ -133,6 +158,10 @@ def _config_to_dict(request: Request) -> dict:
         "RESEARCH_EMBED_PARTICIPANT_ID_REGEX": request.app.state.config.RESEARCH_EMBED_PARTICIPANT_ID_REGEX,
         "RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN": request.app.state.config.RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN,
         "RESEARCH_EMBED_ALLOWED_ORIGIN": request.app.state.config.RESEARCH_EMBED_ALLOWED_ORIGIN,
+        "RESEARCH_EMBED_TRACK_KEYSTROKES": request.app.state.config.RESEARCH_EMBED_TRACK_KEYSTROKES,
+        "RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS": request.app.state.config.RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS,
+        "RESEARCH_EMBED_TRACK_VISIBILITY": request.app.state.config.RESEARCH_EMBED_TRACK_VISIBILITY,
+        "RESEARCH_EMBED_TRACK_CLIPBOARD": request.app.state.config.RESEARCH_EMBED_TRACK_CLIPBOARD,
     }
 
 
@@ -199,6 +228,18 @@ async def set_research_embed_config(
     )
     request.app.state.config.RESEARCH_EMBED_ALLOWED_ORIGIN = (
         form_data.RESEARCH_EMBED_ALLOWED_ORIGIN
+    )
+    request.app.state.config.RESEARCH_EMBED_TRACK_KEYSTROKES = (
+        form_data.RESEARCH_EMBED_TRACK_KEYSTROKES
+    )
+    request.app.state.config.RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS = (
+        form_data.RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS
+    )
+    request.app.state.config.RESEARCH_EMBED_TRACK_VISIBILITY = (
+        form_data.RESEARCH_EMBED_TRACK_VISIBILITY
+    )
+    request.app.state.config.RESEARCH_EMBED_TRACK_CLIPBOARD = (
+        form_data.RESEARCH_EMBED_TRACK_CLIPBOARD
     )
     return _config_to_dict(request)
 
@@ -333,3 +374,105 @@ async def sync_entry_service(
         )
 
     return {"status": "ok", "detail": "Entry service connected."}
+
+
+############################
+# Behavioral tracking events
+############################
+#
+# Ingest is intentionally permissive about *when* it accepts events (any
+# signed-in user, not just chat-only participants -- staff previewing the
+# embed with ?chatOnly=true produce the same event shape) but strict about
+# *whether tracking is on at all*: each of the four feature toggles is
+# re-checked server-side per batch, not just trusted from the client, so a
+# stale/modified frontend can't write data for a feature an admin has since
+# turned off.
+
+
+@router.post("/events")
+async def ingest_research_embed_events(
+    request: Request,
+    form_data: ResearchEmbedEventBatchForm,
+    user=Depends(get_verified_user),
+):
+    enabled_event_types = set()
+    if request.app.state.config.RESEARCH_EMBED_TRACK_KEYSTROKES:
+        enabled_event_types.add("keystroke")
+    if request.app.state.config.RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS:
+        enabled_event_types.add("temporal_delay")
+    if request.app.state.config.RESEARCH_EMBED_TRACK_VISIBILITY:
+        enabled_event_types.add("visibility")
+    if request.app.state.config.RESEARCH_EMBED_TRACK_CLIPBOARD:
+        enabled_event_types.add("clipboard")
+
+    accepted = [e for e in form_data.events if e.event_type in enabled_event_types]
+    dropped = len(form_data.events) - len(accepted)
+    if dropped:
+        log.info(
+            "Dropped %d research embed event(s) for a type that's currently "
+            "disabled (user_id=%s).",
+            dropped,
+            user.id,
+        )
+
+    inserted = ResearchEmbedEvents.insert_events(user.id, accepted)
+    return {"accepted": inserted, "dropped": dropped}
+
+
+def _json_dumps_for_csv(data: dict) -> str:
+    try:
+        return json.dumps(data)
+    except (TypeError, ValueError):
+        return str(data)
+
+
+@router.get("/events/export")
+async def export_research_embed_events(
+    request: Request,
+    format: str = "csv",
+    user=Depends(get_admin_user),
+):
+    """Admin-only. Every behavioral-tracking event ever recorded, across all
+    participants, oldest first. Meant for pulling into your own analysis
+    pipeline (R, pandas, etc.) -- this fork doesn't build an in-app
+    aggregate-analytics dashboard on top of this data."""
+    events = ResearchEmbedEvents.get_all_events()
+
+    if format == "json":
+        return [e.model_dump() for e in events]
+
+    if format != "csv":
+        raise HTTPException(
+            status_code=400, detail="format must be 'csv' or 'json'."
+        )
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        ["id", "user_id", "chat_id", "event_type", "client_timestamp", "created_at", "data"]
+    )
+    for e in events:
+        writer.writerow(
+            [
+                e.id,
+                e.user_id,
+                e.chat_id or "",
+                e.event_type,
+                e.client_timestamp if e.client_timestamp is not None else "",
+                e.created_at,
+                # `data` is a nested JSON payload with a shape that varies by
+                # event_type -- serialize it as a JSON string in a single CSV
+                # cell rather than trying to flatten every possible key into
+                # its own column.
+                _json_dumps_for_csv(e.data),
+            ]
+        )
+
+    buffer.seek(0)
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=research_embed_events.csv"
+        },
+    )

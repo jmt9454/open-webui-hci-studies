@@ -78,6 +78,12 @@
 		getTaskIdsByChatId
 	} from '$lib/apis';
 	import { getTools } from '$lib/apis/tools';
+	import {
+		initResearchEmbedTracking,
+		setResearchEmbedTrackingChatId,
+		onResearchEmbedMessageSent,
+		onResearchEmbedStreamingDone
+	} from '$lib/utils/researchEmbedTracking';
 
 	import Banner from '../common/Banner.svelte';
 	import MessageInput from '$lib/components/chat/MessageInput.svelte';
@@ -98,6 +104,12 @@
 	$: isParticipant = $user?.email?.endsWith('@' + PARTICIPANT_EMAIL_DOMAIN) ?? false;
 	$: staffPreview = $page.url.searchParams.get('chatOnly') === 'true';
 	$: chatOnly = isParticipant || staffPreview;
+
+	// Research embed: optional behavioral-tracking events get tagged with
+	// whichever chat they happened in (null until the first message creates
+	// one). Not gated on chatOnly -- the ingest endpoint and its four admin
+	// toggles are what actually decide whether anything gets recorded.
+	$: setResearchEmbedTrackingChatId($chatId);
 	// --- end research embed ---
 
 	let loading = false;
@@ -409,6 +421,12 @@
 		console.log('mounted');
 		window.addEventListener('message', onMessageHandler);
 		$socket?.on('chat-events', chatEventHandler);
+
+		// Research embed: no-op unless an admin has turned on at least one of
+		// the RESEARCH_EMBED_TRACK_* toggles. Safe to call on every mount --
+		// initResearchEmbedTracking() guards against setting up its timers/
+		// listeners more than once per page load.
+		initResearchEmbedTracking();
 
 		if (!$chatId) {
 			chatIdUnsubscriber = chatId.subscribe(async (value) => {
@@ -1204,6 +1222,13 @@
 		if (done) {
 			message.done = true;
 
+			// Research embed: marks the start of the "waiting for the
+			// participant's next input" window for the optional temporal-delay
+			// tracking feature, and ends the "streaming" window the optional
+			// tab-visibility tracking feature uses. No-op if both toggles are
+			// off. See researchEmbedTracking.ts.
+			onResearchEmbedStreamingDone();
+
 			if ($settings.responseAutoCopy) {
 				copyToClipboard(message.content);
 			}
@@ -1302,6 +1327,14 @@
 			);
 			return;
 		}
+
+		// Research embed: past this point the submit is actually going through
+		// (all the early-return validation above has passed), so this is the
+		// single place that covers every way a message can be sent -- typing
+		// Enter, clicking Send, voice input, the postMessage
+		// action:submit bridge -- for the optional temporal-delay tracking
+		// feature. No-op if that toggle is off (see researchEmbedTracking.ts).
+		onResearchEmbedMessageSent();
 
 		prompt = '';
 

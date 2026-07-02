@@ -87,6 +87,33 @@ export const syncEntryService = async (token: string, apiKey: string) => {
 	return res;
 };
 
+// Sends a batch of behavioral-tracking events (keystroke/temporal_delay/
+// visibility/clipboard) recorded by src/lib/utils/researchEmbedTracking.ts.
+// Deliberately swallows errors and returns null instead of throwing --
+// tracking is best-effort telemetry, a dropped batch (offline participant,
+// server hiccup) should never surface an error to the participant or block
+// the chat UI.
+export const sendResearchEmbedEvents = async (token: string, events: object[]) => {
+	const res = await fetch(`${WEBUI_API_BASE_URL}/research-embed/events`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({ events })
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.log(err);
+			return null;
+		});
+
+	return res;
+};
+
 export const getResearchEmbedCode = async (token: string) => {
 	let error = null;
 

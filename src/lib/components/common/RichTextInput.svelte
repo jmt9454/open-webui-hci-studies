@@ -297,7 +297,23 @@
 						eventDispatch('keydown', { event });
 						return false;
 					},
+					copy: (view, event) => {
+						// Unconditionally dispatched (unlike the `paste` handler below,
+						// which only tells the parent about paste in specific cases) --
+						// the research embed's optional clipboard tracking needs every
+						// copy, not just ones that also happen to be large-text/image
+						// pastes. Parents that don't care simply don't listen for this.
+						eventDispatch('copy', { event });
+						return false;
+					},
 					paste: (view, event) => {
+						// See the `copy` handler above -- dispatched first and
+						// unconditionally so the research embed's optional clipboard
+						// tracking sees every paste, before the type-specific handling
+						// below (which only forwards `paste` to the parent for
+						// large-text/image cases) runs.
+						eventDispatch('paste-tracking', { event });
+
 						if (event.clipboardData) {
 							// Extract plain text from clipboard and paste it without formatting
 							const plainText = event.clipboardData.getData('text/plain');
