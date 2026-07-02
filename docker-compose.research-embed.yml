@@ -118,16 +118,29 @@ services:
       # what stops Compose from printing a "variable is not set" warning when
       # you haven't set one, since leaving it unset is the normal case now.
       - ENTRY_SERVICE_SYNC_SECRET=${ENTRY_SERVICE_SYNC_SECRET:-}
-      # Participant accounts are created exclusively by the entry service
-      # via the admin API -- the normal public sign-up page has no business
-      # being open on a research-embed deployment. Left on, anyone who finds
-      # the real Open WebUI URL (not just the /enter embed link) could
-      # self-register a normal, non-chat-only account, or a mischievous
-      # participant could register under the same email domain the entry
-      # service uses and mess with chat-only detection. Override to `true`
-      # here (or in your own .env) if you actually want public sign-ups for
-      # some other reason.
-      - ENABLE_SIGNUP=false
+      # Deliberately NOT setting ENABLE_SIGNUP=false here, even though
+      # participant accounts should only ever be created by the entry
+      # service. Open WebUI's own /api/v1/auths/signup handler
+      # (backend/open_webui/routers/auths.py) already does exactly what we
+      # want natively: signup is open until the very first user account is
+      # created (who becomes admin), and the instant that happens it flips
+      # ENABLE_SIGNUP to False itself, persisted in the DB -- no restart, no
+      # manual toggle. Forcing ENABLE_SIGNUP=false via env var here would
+      # 403 that very first signup too, since the handler checks
+      # ENABLE_SIGNUP unconditionally with no "zero users yet" exception on
+      # this code path -- which is exactly the bug that blocked bootstrap on
+      # a fresh deployment. Leave this alone; after your admin account
+      # exists, public signup is already closed. If you want to double
+      # check, it's the "Enable New Sign Ups" toggle in Admin Settings >
+      # General.
+      #
+      # SECURITY NOTE: because signup is open by default until that first
+      # account exists, claim your admin account immediately after bringing
+      # the stack up -- don't leave a fresh deployment sitting on a public
+      # domain unclaimed, or anyone (including the automated scanners that
+      # find new domains within minutes) could sign up first and become the
+      # only admin. See "Claim your admin account immediately" in
+      # RESEARCH-EMBED.md.
     volumes:
       # Where open-webui and entry-service auto-negotiate the shared sync
       # secret on first boot -- see the "Zero-touch bootstrap" note above.
