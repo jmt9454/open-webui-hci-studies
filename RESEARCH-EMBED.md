@@ -206,6 +206,36 @@ All under **Admin Panel > Settings > Research Embed**:
 | Participant Email Domain | Participant accounts are created as `{id}@this-domain` -- purely internal, used to tell participant accounts apart from staff accounts. |
 | Allowed Embed Origin | Sets the `Content-Security-Policy: frame-ancestors` response header so browsers will actually render the iframe. Must match your survey platform's real domain (check your survey's share link -- some institutions are on a subdomain like `yourschool.co1.qualtrics.com`). |
 | Connect Entry Service | Pushes a fresh admin API key to entry-service so it can create accounts. Safe to click again any time (e.g. after rotating keys). |
+| Keystroke Dynamics | Off by default. Logs key-down/key-up timing in the chat input (never the actual keys) to support typing-rhythm analysis. |
+| Temporal Delays | Off by default. Logs the time between a response finishing and the participant sending their next message. |
+| Tab Visibility | Off by default. Logs when a participant switches away from the tab while a response is streaming, and for how long. |
+| Copy/Paste Events | Off by default. Logs copy and paste events in the chat input, including the copied/pasted text. The most sensitive of the four -- make sure your IRB protocol and consent language specifically cover clipboard content before enabling it. |
+
+## Behavioral tracking data
+
+The four toggles above are all off by default and independent of each other
+-- turning one on only affects that stream of data, and each is re-checked
+server-side on every batch of events a participant's browser sends, so
+turning one off in Admin Settings stops new data immediately even for
+already-open participant sessions.
+
+Collected events land in their own database table (`research_embed_event`),
+never mixed into chat transcripts. To pull everything collected so far for
+analysis:
+
+```
+GET /api/v1/research-embed/events/export?format=csv
+GET /api/v1/research-embed/events/export?format=json
+```
+
+(admin authentication required, e.g. `Authorization: Bearer <your API key>`).
+CSV is the default; each row is one event with a `data` column holding a
+JSON blob whose shape depends on `event_type` (`keystroke`, `temporal_delay`,
+`visibility`, or `clipboard`).
+
+Get IRB approval for whichever of these you plan to enable, and make sure
+your consent language matches what's actually being collected, before
+turning any of them on for real participants.
 
 ## Pre-launch checklist
 

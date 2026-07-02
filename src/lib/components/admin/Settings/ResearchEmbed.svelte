@@ -14,6 +14,7 @@
 
 	import Textarea from '$lib/components/common/Textarea.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
+	import Switch from '$lib/components/common/Switch.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -220,6 +221,72 @@
 								'The exact origin your survey platform serves the embedding page from (scheme + host, no path). Sets Content-Security-Policy: frame-ancestors so browsers allow the iframe -- check your survey\'s share link, some institutions are on a subdomain like yourschool.co1.qualtrics.com. Leave empty and most browsers will refuse to render the embed at all.'
 							)}
 						</div>
+					</div>
+				</div>
+
+				<div class="mb-3.5">
+					<div class=" mb-2.5 text-base font-medium">
+						{$i18n.t('Behavioral Tracking')}
+					</div>
+
+					<hr class=" border-gray-100 dark:border-gray-850 my-2" />
+
+					<div class="mb-2.5 text-xs text-gray-500">
+						{$i18n.t(
+							'Optional, off by default. Each toggle below enables a separate stream of participant telemetry (see the study\'s IRB protocol before enabling any of these). All four re-check this setting server-side, so disabling one here stops new events from being accepted even if a participant\'s page was loaded before the change.'
+						)}
+					</div>
+
+					<div class="mb-2.5 flex w-full justify-between pr-2">
+						<div class=" self-center text-xs font-medium">
+							{$i18n.t('Keystroke Dynamics')}
+						</div>
+
+						<Switch bind:state={config.RESEARCH_EMBED_TRACK_KEYSTROKES} />
+					</div>
+					<div class="text-xs text-gray-500 mb-2.5">
+						{$i18n.t(
+							'Logs key-down/key-up timing in the chat input (not which keys were pressed) to support typing-rhythm analysis.'
+						)}
+					</div>
+
+					<div class="mb-2.5 flex w-full justify-between pr-2">
+						<div class=" self-center text-xs font-medium">
+							{$i18n.t('Temporal Delays')}
+						</div>
+
+						<Switch bind:state={config.RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS} />
+					</div>
+					<div class="text-xs text-gray-500 mb-2.5">
+						{$i18n.t(
+							'Logs the time between a response finishing and the participant sending their next message.'
+						)}
+					</div>
+
+					<div class="mb-2.5 flex w-full justify-between pr-2">
+						<div class=" self-center text-xs font-medium">
+							{$i18n.t('Tab Visibility')}
+						</div>
+
+						<Switch bind:state={config.RESEARCH_EMBED_TRACK_VISIBILITY} />
+					</div>
+					<div class="text-xs text-gray-500 mb-2.5">
+						{$i18n.t(
+							'Logs when the participant switches away from the tab while a response is streaming, and for how long.'
+						)}
+					</div>
+
+					<div class="mb-2.5 flex w-full justify-between pr-2">
+						<div class=" self-center text-xs font-medium">
+							{$i18n.t('Copy/Paste Events')}
+						</div>
+
+						<Switch bind:state={config.RESEARCH_EMBED_TRACK_CLIPBOARD} />
+					</div>
+					<div class="text-xs text-gray-500 mb-2.5">
+						{$i18n.t(
+							'Logs copy and paste events in the chat input, including the copied/pasted text. The most sensitive of the four -- make sure your consent language covers clipboard content specifically.'
+						)}
 					</div>
 				</div>
 

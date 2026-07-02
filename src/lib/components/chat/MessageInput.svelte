@@ -33,6 +33,7 @@
 	import { deleteFileById } from '$lib/apis/files';
 
 	import { WEBUI_BASE_URL, WEBUI_API_BASE_URL, PASTED_TEXT_CHARACTER_LIMIT } from '$lib/constants';
+	import { recordKeystrokeEvent, recordClipboardEvent } from '$lib/utils/researchEmbedTracking';
 
 	import InputMenu from './MessageInput/InputMenu.svelte';
 	import VoiceRecording from './MessageInput/VoiceRecording.svelte';
@@ -661,8 +662,18 @@
 												}}
 												oncompositionstart={() => (isComposing = true)}
 												oncompositionend={() => (isComposing = false)}
+												on:keyup={(e) => {
+													recordKeystrokeEvent('keyup', e.detail.event);
+												}}
+												on:copy={(e) => {
+													recordClipboardEvent('copy', e.detail.event);
+												}}
+												on:paste-tracking={(e) => {
+													recordClipboardEvent('paste', e.detail.event);
+												}}
 												on:keydown={async (e) => {
 													e = e.detail.event;
+													recordKeystrokeEvent('keydown', e);
 
 													const isCtrlPressed = e.ctrlKey || e.metaKey; // metaKey is for Cmd key on Mac
 													const commandsContainerElement =
@@ -844,7 +855,11 @@
 											bind:value={prompt}
 											on:compositionstart={() => (isComposing = true)}
 											on:compositionend={() => (isComposing = false)}
+											on:keyup={(e) => recordKeystrokeEvent('keyup', e)}
+											on:copy={(e) => recordClipboardEvent('copy', e)}
 											on:keydown={async (e) => {
+												recordKeystrokeEvent('keydown', e);
+
 												const isCtrlPressed = e.ctrlKey || e.metaKey; // metaKey is for Cmd key on Mac
 
 												const commandsContainerElement =
@@ -1009,6 +1024,8 @@
 												e.target.style.height = Math.min(e.target.scrollHeight, 320) + 'px';
 											}}
 											on:paste={async (e) => {
+												recordClipboardEvent('paste', e);
+
 												const clipboardData = e.clipboardData || window.clipboardData;
 
 												if (clipboardData && clipboardData.items) {

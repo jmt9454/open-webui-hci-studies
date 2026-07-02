@@ -301,6 +301,10 @@ from open_webui.config import (
     RESEARCH_EMBED_PARTICIPANT_ID_REGEX,
     RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN,
     RESEARCH_EMBED_ALLOWED_ORIGIN,
+    RESEARCH_EMBED_TRACK_KEYSTROKES,
+    RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS,
+    RESEARCH_EMBED_TRACK_VISIBILITY,
+    RESEARCH_EMBED_TRACK_CLIPBOARD,
     # Misc
     ENV,
     CACHE_DIR,
@@ -547,6 +551,10 @@ app.state.config.RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN = (
     RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN
 )
 app.state.config.RESEARCH_EMBED_ALLOWED_ORIGIN = RESEARCH_EMBED_ALLOWED_ORIGIN
+app.state.config.RESEARCH_EMBED_TRACK_KEYSTROKES = RESEARCH_EMBED_TRACK_KEYSTROKES
+app.state.config.RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS = RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS
+app.state.config.RESEARCH_EMBED_TRACK_VISIBILITY = RESEARCH_EMBED_TRACK_VISIBILITY
+app.state.config.RESEARCH_EMBED_TRACK_CLIPBOARD = RESEARCH_EMBED_TRACK_CLIPBOARD
 
 
 app.state.config.DEFAULT_MODELS = DEFAULT_MODELS
@@ -1318,6 +1326,20 @@ async def get_app_config(request: Request):
                     "enable_admin_chat_access": ENABLE_ADMIN_CHAT_ACCESS,
                     "enable_google_drive_integration": app.state.config.ENABLE_GOOGLE_DRIVE_INTEGRATION,
                     "enable_onedrive_integration": app.state.config.ENABLE_ONEDRIVE_INTEGRATION,
+                    # Research embed behavioral tracking toggles. Exposed here
+                    # (rather than only via the admin-only
+                    # /api/v1/research-embed/config endpoint) because the
+                    # client that needs to read these is a signed-in
+                    # participant's own browser, not an admin -- see
+                    # research_embed.py's module docstring / comments for why
+                    # this fork has both an admin-only config endpoint and
+                    # this public-to-any-authenticated-user path.
+                    "research_embed": {
+                        "track_keystrokes": app.state.config.RESEARCH_EMBED_TRACK_KEYSTROKES,
+                        "track_temporal_delays": app.state.config.RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS,
+                        "track_visibility": app.state.config.RESEARCH_EMBED_TRACK_VISIBILITY,
+                        "track_clipboard": app.state.config.RESEARCH_EMBED_TRACK_CLIPBOARD,
+                    },
                 }
                 if user is not None
                 else {}
