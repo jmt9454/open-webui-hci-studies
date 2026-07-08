@@ -27,10 +27,13 @@ Two required pieces, plus an optional third for routing/HTTPS:
   [Already running your own reverse proxy?](#already-running-your-own-reverse-proxy)
   below.
 
-Everything you'd actually want to change for a study -- which model,
-the seed message, the participant ID format, which domain is allowed to
-embed you -- is configured live from **Admin Panel > Settings > Research
-Embed**, no redeploy needed.
+Research embed is enabled per model, from **Workspace > Models** (edit or
+create the model for your study, then look for the "Research Embed" section
+-- admin-only). This is what lets more than one study or condition run on
+the same instance at once, each with its own model, seed message, and embed
+link. A few things stay instance-wide instead, configured live from **Admin
+Panel > Settings > Research Embed**: the participant ID format and which
+domain is allowed to embed you, no redeploy needed either way.
 
 ## Prerequisites
 
@@ -114,10 +117,8 @@ Embed**, no redeploy needed.
 5. Add a model connection: **Admin Panel > Settings > Connections**, add
    your OpenAI (or other) API key, same as any normal Open WebUI setup.
 
-6. Go to **Admin Panel > Settings > Research Embed**:
-   - Pick the model participants will talk to.
-   - Optionally set a seed message (the first message participants see
-     already sent, e.g. "Hi! Tell me about a recent purchase you regret.").
+6. Go to **Admin Panel > Settings > Research Embed** (instance-wide, one-time
+   setup):
    - Set the **Allowed Embed Origin** to your survey platform's domain
      (e.g. `https://yourorg.qualtrics.com`) -- required for the embed to
      actually render in an iframe.
@@ -126,11 +127,20 @@ Embed**, no redeploy needed.
      entry-service create participant accounts on your behalf -- no manual
      key generation or `.env` editing involved.
 
-7. Copy the generated **Qualtrics Entry URL** or **Iframe Snippet** from the
-   same page and paste it into your survey.
+7. Go to **Workspace > Models**, then create (or edit) the model your study
+   will use:
+   - Grant it non-admin access control (so participant accounts can
+     actually use it), same as any other model you want non-admins to see.
+   - In the **Research Embed** section (admin-only), turn on **Enabled**.
+   - Optionally set a **Seed Message** (the first message participants see
+     already sent, e.g. "Hi! Tell me about a recent purchase you regret.").
+   - Save the model, then copy the generated **Qualtrics Entry URL** or
+     **Iframe Snippet** from the same section and paste it into your survey.
 
-That's it. Every setting above can be changed later from the same page
-without touching Docker at all.
+That's it. Every setting above can be changed later without touching Docker
+at all. Repeat step 7 (a new or existing model, its own Research Embed
+toggle) for each additional study or condition -- step 6 only needs doing
+once per instance.
 
 ## Local testing vs. real deployment
 
@@ -195,21 +205,53 @@ front.
 
 ## Admin settings reference
 
-All under **Admin Panel > Settings > Research Embed**:
+Two separate places now -- see [How it works, briefly](#how-it-works-briefly)
+for why: per-model settings live with the model, everything else is
+instance-wide.
+
+**Workspace > Models > (edit a model) > Research Embed** (admin-only,
+independent per model):
 
 | Setting | What it does |
 |---|---|
-| Model | The model participants are routed to. Must also be given non-admin access in Admin Panel > Settings > Models, or participants will hit a "model not selected" error. |
-| Seed Message | First message auto-sent on a participant's first visit. Leave empty to start on a blank chat instead. |
+| Enabled | Turns research embed on for this specific model. Off by default on every model. |
+| Seed Message | First message auto-sent on a participant's first visit to this model's chat. Leave empty to start on a blank chat instead. |
+| Qualtrics Entry URL / Iframe Snippet | Generated from the model's saved id, enabled state, and the instance-wide settings below. Only appears once the model has been saved at least once; click Refresh after changing Enabled/Seed Message and saving. |
+
+Also give the model non-admin access control (Workspace > Models > edit ->
+access control), or participant accounts won't be able to use it.
+
+**Admin Panel > Settings > Research Embed** (instance-wide, shared by every
+study):
+
+| Setting | What it does |
+|---|---|
 | Participant ID Parameter Name | The URL query param your survey platform uses for the participant ID (default `pid`; Qualtrics's own field is `${e://Field/ResponseID}`, already built into the generated embed URL). |
 | Participant ID Format | A regex the participant ID must match before an account is created. Default matches Qualtrics Response IDs. |
-| Participant Email Domain | Participant accounts are created as `{id}@this-domain` -- purely internal, used to tell participant accounts apart from staff accounts. |
-| Allowed Embed Origin | Sets the `Content-Security-Policy: frame-ancestors` response header so browsers will actually render the iframe. Must match your survey platform's real domain (check your survey's share link -- some institutions are on a subdomain like `yourschool.co1.qualtrics.com`). |
-| Connect Entry Service | Pushes a fresh admin API key to entry-service so it can create accounts. Safe to click again any time (e.g. after rotating keys). |
-| Keystroke Dynamics | Off by default. Logs key-down/key-up timing in the chat input (never the actual keys) to support typing-rhythm analysis. |
-| Temporal Delays | Off by default. Logs the time between a response finishing and the participant sending their next message. |
-| Tab Visibility | Off by default. Logs when a participant switches away from the tab while a response is streaming, and for how long. |
-| Copy/Paste Events | Off by default. Logs copy and paste events in the chat input, including the copied/pasted text. The most sensitive of the four -- make sure your IRB protocol and consent language specifically cover clipboard content before enabling it. |
+| Participant Email Domain | Participant accounts are created as `{id}.{scope}@this-domain` -- purely internal, used to tell participant accounts apart from staff accounts (the `.{scope}` part keeps different studies' participant pools from colliding, see [Running more than one study](#running-more-than-one-study-at-once)). |
+| Allowed Embed Origin | Sets the `Content-Security-Policy: frame-ancestors` response header so browsers will actually render the iframe. Must match your survey platform's real domain (check your survey's share link -- some institutions are on a subdomain like `yourschool.co1.qualtrics.com`). If multiple studies embed from different platforms, this needs to cover all of them. |
+| Connect Entry Service | Pushes a fresh admin API key to entry-service so it can create accounts. Safe to click again any time (e.g. after rotating keys). Only needs doing once, regardless of how many studies you run. |
+| Keystroke Dynamics | Off by default. Logs key-down/key-up timing in the chat input (never the actual keys) to support typing-rhythm analysis. Applies to every study on this instance. |
+| Temporal Delays | Off by default. Logs the time between a response finishing and the participant sending their next message. Applies to every study on this instance. |
+| Tab Visibility | Off by default. Logs when a participant switches away from the tab while a response is streaming, and for how long. Applies to every study on this instance. |
+| Copy/Paste Events | Off by default. Logs copy and paste events in the chat input, including the copied/pasted text. The most sensitive of the four -- make sure your IRB protocol and consent language specifically cover clipboard content before enabling it. Applies to every study on this instance. |
+
+## Running more than one study at once
+
+Each model's Research Embed section generates its own independent entry
+link, of the form `/enter?pid=...&model=<model_id>&survey=${e://Field/SurveyID}`.
+`model` is what routes a participant to the right model/condition; `survey`
+(Qualtrics's own per-survey piped-text field) is what keeps two different
+surveys' participant pools separate even if they happen to reuse the same
+model. A participant account is created per `(participant id, survey id --
+or model id if the platform doesn't send one)` pair, so the same person
+completing two different studies (or, in a between-subjects design, two
+different conditions/models within one study) gets a separate account and
+chat for each, automatically.
+
+If you're only ever running one study at a time, none of this needs any
+extra thought -- just enable Research Embed on that one model and share its
+link.
 
 ## Behavioral tracking data
 
@@ -249,10 +291,16 @@ turning any of them on for real participants.
 - **Set the Allowed Embed Origin** to your actual survey platform's domain
   before going live -- without it, most browsers refuse to render the embed
   at all.
-- **Give the model non-admin access**: Admin Panel > Settings > Models ->
-  your model -> make it accessible to non-admin users (or at least to the
-  participant role), or every participant will hit a "model not selected"
-  error.
+- **Give the model non-admin access**: Workspace > Models -> your model ->
+  access control -> make it accessible to non-admin users (or at least to
+  the participant role), or every participant will hit a "model not
+  selected" error.
+- **Confirm Enabled is actually on** for the model you're about to share,
+  and that you've saved after turning it on -- Workspace > Models -> edit
+  the model -> Research Embed.
+- **If you generated an embed link before upgrading to per-model research
+  embed**, regenerate it -- old links don't carry the `model=` parameter
+  entry-service now requires, and will 400.
 - **Don't set `WEBUI_AUTH_TRUSTED_EMAIL_HEADER`** for the `open-webui`
   service. If it's set, sign-in takes a different code path (trusted-header
   auth) and entry-service's participant sign-ins will fail outright.
@@ -285,6 +333,13 @@ other system storing human-subjects data:
   [Local testing](#local-testing-vs-real-deployment) above.
 - **"Model not selected" for participants** -- the model needs non-admin
   access control; see the checklist above.
+- **`/enter` returns a 400 saying "this entry link is missing its model
+  parameter"** -- it was generated before per-model research embed shipped.
+  Regenerate it from Workspace > Models > (the model) > Research Embed.
+- **`/enter` returns a 503 saying "this study isn't configured yet, or has
+  been turned off"** -- Research Embed isn't enabled (or isn't saved) on the
+  model the link points at; check Workspace > Models > edit that model >
+  Research Embed > Enabled.
 - **`POST /api/v1/auths/signup` returns 403, can't create the admin
   account at all** -- something is forcing `ENABLE_SIGNUP=false` before the
   first account exists. This fork's own compose files deliberately don't do
@@ -297,9 +352,6 @@ other system storing human-subjects data:
 - **`/enter` returns a 503 saying the instance "hasn't been connected"** --
   you haven't clicked **Connect Entry Service** yet (or need to click it
   again after recreating the entry-service container/volume).
-- **`/enter` returns a 503 saying "this study isn't configured yet"** -- no
-  model has been picked and saved in Admin Panel > Settings > Research
-  Embed.
 - **Port 80/443 already in use** (e.g. `Bind for 0.0.0.0:80 failed: port is
   already allocated`) -- something else already holds that port. Find out
   what, in order:
@@ -354,11 +406,25 @@ docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml build
 
 ## Key files, if you're modifying this
 
-- `entry-service/entry_service.py` -- the standalone entry service.
-- `backend/open_webui/routers/research_embed.py` -- the admin-configurable
-  settings API this fork adds.
+- `entry-service/entry_service.py` -- the standalone entry service. Model-
+  and survey-aware as of the per-model research embed change: reads `model`
+  (required) and `survey` (optional) query params on `/enter`, and scopes
+  participant accounts/chats accordingly.
+- `backend/open_webui/routers/research_embed.py` -- the instance-wide
+  admin-configurable settings API (participant ID format, allowed origin,
+  behavioral-tracking toggles) plus the per-model
+  `GET /models/{id}/config` and `GET /models/{id}/embed-code` endpoints.
+- `backend/open_webui/models/models.py` -- `ModelMeta.research_embed` is
+  where a model's own `{enabled, seed_message}` lives (no migration needed,
+  `meta` is already a free-form JSON blob).
+- `backend/open_webui/routers/models.py` -- `_enforce_research_embed_admin_only`
+  is what stops a non-admin from enabling this via a direct API call even if
+  they can otherwise edit the model.
 - `src/lib/components/admin/Settings/ResearchEmbed.svelte` -- the admin UI
-  for the above.
+  for the instance-wide settings above.
+- `src/lib/components/workspace/Models/ModelResearchEmbed.svelte`, wired
+  into `ModelEditor.svelte` -- the per-model admin-only UI (Enabled, Seed
+  Message, generated embed code).
 - `src/routes/(app)/+layout.svelte` and `src/lib/components/chat/Chat.svelte`
   -- where chat-only mode (hiding the sidebar/navbar/settings) is
   implemented, gated on participant email domain.
@@ -368,6 +434,6 @@ docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml build
   [Already running your own reverse proxy?](#already-running-your-own-reverse-proxy)).
   `Caddyfile.production` -- Caddy's routing config, only relevant if you're
   using `docker-compose.caddy.yml`.
-- `futurefeature.md` -- a written-up, not-yet-implemented proposal for
-  per-model embed configuration (running multiple studies/conditions on one
-  instance).
+- `futurefeature.md` -- the original design doc for per-model embed
+  configuration; kept as a historical reference for the reasoning even
+  though it's now implemented, and as a spot for the next proposal.

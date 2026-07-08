@@ -9,6 +9,7 @@
 	import FiltersSelector from '$lib/components/workspace/Models/FiltersSelector.svelte';
 	import ActionsSelector from '$lib/components/workspace/Models/ActionsSelector.svelte';
 	import Capabilities from '$lib/components/workspace/Models/Capabilities.svelte';
+	import ModelResearchEmbed from '$lib/components/workspace/Models/ModelResearchEmbed.svelte';
 	import Textarea from '$lib/components/common/Textarea.svelte';
 	import { getTools } from '$lib/apis/tools';
 	import { getFunctions } from '$lib/apis/functions';
@@ -80,6 +81,16 @@
 		citations: true
 	};
 
+	// Admin-only, see ModelResearchEmbed.svelte / futurefeature.md's
+	// "Per-Model Research Embed" design. Kept as its own local object (same
+	// pattern as `capabilities` above) rather than binding straight into
+	// info.meta.research_embed, since that can be null/undefined on a model
+	// that's never had this section touched.
+	let researchEmbed = {
+		enabled: false,
+		seed_message: ''
+	};
+
 	let knowledge = [];
 	let toolIds = [];
 	let filterIds = [];
@@ -116,6 +127,15 @@
 
 		info.access_control = accessControl;
 		info.meta.capabilities = capabilities;
+
+		// Non-admins never render the section that edits this (see the
+		// {#if $user?.role === 'admin'} guard below), so `researchEmbed` here
+		// is always just whatever was already loaded for them -- the backend
+		// also independently refuses to apply a non-admin's change to this
+		// field either way (routers/models.py's
+		// _enforce_research_embed_admin_only), so this isn't the only thing
+		// standing between a non-admin and enabling it.
+		info.meta.research_embed = researchEmbed;
 
 		if (enableDescription) {
 			info.meta.description = info.meta.description.trim() === '' ? null : info.meta.description;
@@ -230,6 +250,7 @@
 				}
 			});
 			capabilities = { ...capabilities, ...(model?.meta?.capabilities ?? {}) };
+			researchEmbed = { ...researchEmbed, ...(model?.meta?.research_embed ?? {}) };
 
 			if ('access_control' in model) {
 				accessControl = model.access_control;
@@ -716,6 +737,18 @@
 					<div class="my-2">
 						<Capabilities bind:capabilities />
 					</div>
+
+					{#if $user?.role === 'admin'}
+						<hr class=" border-gray-100 dark:border-gray-850 my-1.5" />
+
+						<div class="my-2">
+							<ModelResearchEmbed
+								bind:research_embed={researchEmbed}
+								modelId={id}
+								isPersisted={edit && !!model}
+							/>
+						</div>
+					{/if}
 
 					<div class="my-2 text-gray-300 dark:text-gray-700">
 						<div class="flex w-full justify-between mb-2">

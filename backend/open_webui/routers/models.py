@@ -18,6 +18,28 @@ from open_webui.utils.access_control import has_access, has_permission
 router = APIRouter()
 
 
+def _enforce_research_embed_admin_only(form_data: ModelForm, existing_model=None) -> None:
+    """
+    Enabling a model's research embed (or changing its seed message) opens
+    an unauthenticated public entry point that creates real accounts and
+    spends that model's API budget -- see futurefeature.md's "Open decision:
+    who can enable this on a model?" (resolved as admin-only, Option A).
+    Hiding the toggle in ModelEditor.svelte isn't enough on its own, since
+    these are the same generic create/update endpoints any model owner with
+    write access can call directly -- so a non-admin's attempted change to
+    meta.research_embed is silently discarded here rather than erroring the
+    whole request out (their other, legitimate edits to the model should
+    still go through).
+    """
+    if getattr(form_data.meta, "research_embed", None) is None:
+        return
+
+    existing_value = (
+        getattr(existing_model.meta, "research_embed", None) if existing_model else None
+    )
+    form_data.meta.research_embed = existing_value
+
+
 ###########################
 # GetModels
 ###########################
@@ -59,6 +81,9 @@ async def create_new_model(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=ERROR_MESSAGES.UNAUTHORIZED,
         )
+
+    if user.role != "admin":
+        _enforce_research_embed_admin_only(form_data)
 
     model = Models.get_model_by_id(form_data.id)
     if model:
@@ -164,6 +189,9 @@ async def update_model_by_id(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
+
+    if user.role != "admin":
+        _enforce_research_embed_admin_only(form_data, existing_model=model)
 
     model = Models.update_model_by_id(id, form_data)
     return model

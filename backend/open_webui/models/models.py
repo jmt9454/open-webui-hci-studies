@@ -44,6 +44,19 @@ class ModelMeta(BaseModel):
 
     capabilities: Optional[dict] = None
 
+    research_embed: Optional[dict] = None
+    """
+        Optional per-model research embed config: {"enabled": bool,
+        "seed_message": str}. Lets a study/condition be embedded as a
+        chat-only Qualtrics link scoped to this one model, independent of
+        any other model's research embed settings on the same instance --
+        see futurefeature.md and backend/open_webui/routers/research_embed.py.
+        Enabling this (or changing seed_message) is admin-only regardless of
+        who can otherwise edit this model, enforced server-side in
+        routers/models.py, since it opens an unauthenticated public entry
+        point that creates real accounts and spends this model's API budget.
+    """
+
     model_config = ConfigDict(extra="allow")
 
     pass
