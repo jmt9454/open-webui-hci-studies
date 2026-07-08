@@ -114,16 +114,24 @@ export const sendResearchEmbedEvents = async (token: string, events: object[]) =
 	return res;
 };
 
-export const getResearchEmbedCode = async (token: string) => {
+// Per-model equivalents of the old global "Embed Code" section -- see
+// futurefeature.md's "Per-Model Research Embed" design. Each model has its
+// own independent enabled/seed_message/embed-code, edited from
+// Workspace > Models > (edit a model) rather than the admin settings page.
+
+export const getModelEmbedCode = async (token: string, modelId: string) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_API_BASE_URL}/research-embed/embed-code`, {
-		method: 'GET',
-		headers: {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${token}`
+	const res = await fetch(
+		`${WEBUI_API_BASE_URL}/research-embed/models/${encodeURIComponent(modelId)}/embed-code`,
+		{
+			method: 'GET',
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${token}`
+			}
 		}
-	})
+	)
 		.then(async (res) => {
 			if (!res.ok) throw await res.json();
 			return res.json();

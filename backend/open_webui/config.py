@@ -2704,19 +2704,15 @@ LDAP_CIPHERS = PersistentConfig(
 # Env vars are only the *initial* value -- once an admin saves this page in
 # Admin Panel > Settings > Research Embed, the database value takes over
 # (same PersistentConfig behavior as every other setting in this file).
+#
+# NOTE: which model + seed message a study uses is NOT global config anymore
+# (see futurefeature.md's "Per-Model Research Embed" design, now
+# implemented) -- that lives per-model in Model.meta.research_embed instead,
+# so more than one study/condition can run on the same instance at once.
+# What's left here is genuinely instance-wide: there's only one set of
+# participant-ID parsing rules and one CSP allowed-origin list, regardless of
+# how many studies are running.
 ####################################
-
-RESEARCH_EMBED_MODEL_ID = PersistentConfig(
-    "RESEARCH_EMBED_MODEL_ID",
-    "research_embed.model_id",
-    os.environ.get("RESEARCH_EMBED_MODEL_ID", ""),
-)
-
-RESEARCH_EMBED_SEED_MESSAGE = PersistentConfig(
-    "RESEARCH_EMBED_SEED_MESSAGE",
-    "research_embed.seed_message",
-    os.environ.get("RESEARCH_EMBED_SEED_MESSAGE", ""),
-)
 
 RESEARCH_EMBED_PARTICIPANT_ID_PARAM = PersistentConfig(
     "RESEARCH_EMBED_PARTICIPANT_ID_PARAM",

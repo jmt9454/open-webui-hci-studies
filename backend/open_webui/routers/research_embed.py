@@ -8,11 +8,21 @@ directly -- that's the standalone entry service's job, which reads this
 config via GET /config using its admin API key. See
 /entry-service/entry_service.py.
 
-The exception is the behavioral-tracking event endpoints near the bottom of
-this file (POST /events, GET /events/export): those ARE hit directly by
-participants' own browsers (authenticated as themselves, not the entry
-service), since that's where keystroke/visibility/clipboard events actually
-happen. See src/lib/utils/researchEmbedTracking.ts for the client side.
+Which model + seed message a study uses is NOT part of that global config --
+see futurefeature.md's "Per-Model Research Embed" design (now implemented):
+that lives per-model in Model.meta.research_embed instead, edited from
+Workspace > Models rather than this admin settings page, so more than one
+study/condition can run on the same instance at once. The
+GET /models/{model_id}/config and GET /models/{model_id}/embed-code
+endpoints below are the per-model equivalents of this file's old global
+/config and /embed-code endpoints.
+
+The other exception is the behavioral-tracking event endpoints near the
+bottom of this file (POST /events, GET /events/export): those ARE hit
+directly by participants' own browsers (authenticated as themselves, not the
+entry service), since that's where keystroke/visibility/clipboard events
+actually happen. See src/lib/utils/researchEmbedTracking.ts for the client
+side.
 """
 
 import csv
@@ -22,6 +32,7 @@ import logging
 import os
 import re
 import secrets
+from urllib.parse import quote
 
 import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -29,6 +40,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from open_webui.utils.auth import get_admin_user, get_verified_user
+from open_webui.models.models import Models
 from open_webui.models.research_embed_events import (
     ResearchEmbedEventBatchForm,
     ResearchEmbedEvents,
@@ -120,8 +132,11 @@ if not ENTRY_SERVICE_SYNC_SECRET:
 
 
 class ResearchEmbedConfigForm(BaseModel):
-    RESEARCH_EMBED_MODEL_ID: str
-    RESEARCH_EMBED_SEED_MESSAGE: str
+    # Model + seed message are NOT here anymore -- they moved to per-model
+    # Model.meta.research_embed (see futurefeature.md's "Per-Model Research
+    # Embed" design). What's left is genuinely instance-wide: one set of
+    # participant-ID parsing rules and one CSP allowed-origin list, shared by
+    # every study running on this instance.
     RESEARCH_EMBED_PARTICIPANT_ID_PARAM: str
     RESEARCH_EMBED_PARTICIPANT_ID_REGEX: str
     RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN: str
@@ -152,8 +167,6 @@ class ResearchEmbedConfigForm(BaseModel):
 
 def _config_to_dict(request: Request) -> dict:
     return {
-        "RESEARCH_EMBED_MODEL_ID": request.app.state.config.RESEARCH_EMBED_MODEL_ID,
-        "RESEARCH_EMBED_SEED_MESSAGE": request.app.state.config.RESEARCH_EMBED_SEED_MESSAGE,
         "RESEARCH_EMBED_PARTICIPANT_ID_PARAM": request.app.state.config.RESEARCH_EMBED_PARTICIPANT_ID_PARAM,
         "RESEARCH_EMBED_PARTICIPANT_ID_REGEX": request.app.state.config.RESEARCH_EMBED_PARTICIPANT_ID_REGEX,
         "RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN": request.app.state.config.RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN,
@@ -213,10 +226,6 @@ async def set_research_embed_config(
 ):
     _validate_config_form(form_data)
 
-    request.app.state.config.RESEARCH_EMBED_MODEL_ID = form_data.RESEARCH_EMBED_MODEL_ID
-    request.app.state.config.RESEARCH_EMBED_SEED_MESSAGE = (
-        form_data.RESEARCH_EMBED_SEED_MESSAGE
-    )
     request.app.state.config.RESEARCH_EMBED_PARTICIPANT_ID_PARAM = (
         form_data.RESEARCH_EMBED_PARTICIPANT_ID_PARAM
     )
@@ -245,48 +254,105 @@ async def set_research_embed_config(
 
 
 ############################
-# Generate Embed Code
+# Per-Model Research Embed
 ############################
+#
+# Whether a model is opted into research embed, its seed message, and its
+# generated embed code all live per-model (Model.meta.research_embed) rather
+# than in the global config above -- see futurefeature.md. Enabling/editing
+# these is admin-only regardless of who can otherwise edit the model
+# (enforced server-side in routers/models.py's create/update handlers, not
+# just hidden in the UI), since a research embed link is an unauthenticated
+# public entry point that creates real accounts and spends that model's API
+# budget.
 
 
-class EmbedCodeResponse(BaseModel):
+class ModelResearchEmbedConfigResponse(BaseModel):
+    enabled: bool
+    seed_message: str
+
+
+@router.get(
+    "/models/{model_id}/config", response_model=ModelResearchEmbedConfigResponse
+)
+async def get_model_research_embed_config(model_id: str, user=Depends(get_admin_user)):
+    """
+    Called by the entry service (using its admin API key) to find out
+    whether a specific model is opted into research embed, and what its seed
+    message is. 404s identically whether the model doesn't exist or simply
+    was never enabled for research embed -- deliberately indistinguishable,
+    so this can't be used to enumerate model ids that exist on this instance
+    but aren't public, or to tell those two cases apart from the outside.
+    """
+    model = Models.get_model_by_id(model_id)
+    research_embed = (getattr(model.meta, "research_embed", None) if model else None) or {}
+
+    if not model or not research_embed.get("enabled"):
+        raise HTTPException(status_code=404, detail="Not found.")
+
+    return {
+        "enabled": True,
+        "seed_message": research_embed.get("seed_message") or "",
+    }
+
+
+class ModelEmbedCodeResponse(BaseModel):
     entry_url: str
     iframe_snippet: str
     warnings: list[str]
 
 
-@router.get("/embed-code", response_model=EmbedCodeResponse)
-async def get_research_embed_code(request: Request, user=Depends(get_admin_user)):
+@router.get("/models/{model_id}/embed-code", response_model=ModelEmbedCodeResponse)
+async def get_model_embed_code(
+    request: Request, model_id: str, user=Depends(get_admin_user)
+):
     """
-    Builds the Qualtrics-ready entry URL and <iframe> snippet from the
-    currently saved config. Uses the host/scheme the admin's own browser used
-    to reach this API (request.base_url) as the public domain -- correct as
-    long as the backend is run behind the reverse proxy described in Part 5
-    (Caddy forwards the original Host/scheme). If this instance is reachable
-    under a different public domain than what admins use internally, edit
-    the generated URL's host manually before pasting it into Qualtrics.
+    Builds the Qualtrics-ready entry URL and <iframe> snippet for one
+    specific model's research embed. Unlike the old global version of this
+    endpoint, the URL now carries the model explicitly (&model=<id>,
+    required by entry_service.py's /enter) and the survey/condition
+    implicitly (&survey=${e://Field/SurveyID}, Qualtrics's own per-survey
+    piped-text field) -- that's what lets more than one study run on this
+    instance at once without their participant accounts/chats colliding.
+    Uses the host/scheme the admin's own browser used to reach this API
+    (request.base_url) as the public domain, same caveat as before: if this
+    instance is reachable under a different public domain than what admins
+    use internally, edit the generated URL's host manually before pasting it
+    into Qualtrics.
     """
-    config = _config_to_dict(request)
+    model = Models.get_model_by_id(model_id)
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found.")
+
+    research_embed = getattr(model.meta, "research_embed", None) or {}
     warnings = []
-
-    if not config["RESEARCH_EMBED_MODEL_ID"]:
+    if not research_embed.get("enabled"):
         warnings.append(
-            "No model selected yet -- participants won't be able to send messages "
-            "until you pick one and save."
-        )
-    if not config["RESEARCH_EMBED_ALLOWED_ORIGIN"]:
-        warnings.append(
-            "No allowed origin set -- most browsers will refuse to render this in "
-            "a Qualtrics iframe until you set your survey platform's domain."
+            "Research embed isn't enabled on this model yet -- turn it on "
+            "below and save before sharing this link."
         )
 
-    param = config["RESEARCH_EMBED_PARTICIPANT_ID_PARAM"] or "pid"
+    global_config = _config_to_dict(request)
+    if not global_config["RESEARCH_EMBED_ALLOWED_ORIGIN"]:
+        warnings.append(
+            "No Allowed Embed Origin set (Admin Panel > Settings > Research "
+            "Embed) -- most browsers will refuse to render this in a "
+            "Qualtrics iframe until you set your survey platform's domain."
+        )
+
+    param = global_config["RESEARCH_EMBED_PARTICIPANT_ID_PARAM"] or "pid"
     base = str(request.base_url).rstrip("/")
 
-    # ${e://Field/ResponseID} is Qualtrics' own piped-text syntax -- it must
-    # stay literal (unescaped) in the URL; Qualtrics substitutes it with the
-    # real response ID before the participant's browser ever requests it.
-    entry_url = f"{base}/enter?{param}=${{e://Field/ResponseID}}"
+    # ${e://Field/ResponseID} and ${e://Field/SurveyID} are Qualtrics' own
+    # piped-text syntax -- they must stay literal (unescaped) in the URL;
+    # Qualtrics substitutes them with the real response/survey ID before the
+    # participant's browser ever requests it. model_id is quoted since model
+    # ids can contain characters like ':' (e.g. "llama3:latest").
+    entry_url = (
+        f"{base}/enter?{param}=${{e://Field/ResponseID}}"
+        f"&model={quote(model_id, safe='')}"
+        f"&survey=${{e://Field/SurveyID}}"
+    )
 
     iframe_snippet = (
         f'<iframe src="{entry_url}" width="100%" height="700" '
