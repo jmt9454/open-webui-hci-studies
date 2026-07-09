@@ -32,6 +32,7 @@ import logging
 import os
 import re
 import secrets
+from typing import Optional
 from urllib.parse import quote
 
 import aiohttp
@@ -134,22 +135,16 @@ if not ENTRY_SERVICE_SYNC_SECRET:
 class ResearchEmbedConfigForm(BaseModel):
     # Model + seed message are NOT here anymore -- they moved to per-model
     # Model.meta.research_embed (see futurefeature.md's "Per-Model Research
-    # Embed" design). What's left is genuinely instance-wide: one set of
+    # Embed" design). Behavioral tracking toggles moved there too (see the
+    # comment above ModelMeta.research_embed in models/models.py), for the
+    # same reason: each study should be able to enable its own tracking
+    # independently. What's left here is genuinely instance-wide: one set of
     # participant-ID parsing rules and one CSP allowed-origin list, shared by
     # every study running on this instance.
     RESEARCH_EMBED_PARTICIPANT_ID_PARAM: str
     RESEARCH_EMBED_PARTICIPANT_ID_REGEX: str
     RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN: str
     RESEARCH_EMBED_ALLOWED_ORIGIN: str
-
-    # Behavioral tracking toggles -- see the comment above the
-    # RESEARCH_EMBED_TRACK_* PersistentConfig entries in config.py. Default
-    # False; only enable once your IRB protocol / consent language covers
-    # the specific feature.
-    RESEARCH_EMBED_TRACK_KEYSTROKES: bool
-    RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS: bool
-    RESEARCH_EMBED_TRACK_VISIBILITY: bool
-    RESEARCH_EMBED_TRACK_CLIPBOARD: bool
 
     # NOTE: deliberately no @field_validator decorators here. Pydantic
     # field validators run during FastAPI's automatic request-body parsing,
@@ -171,10 +166,6 @@ def _config_to_dict(request: Request) -> dict:
         "RESEARCH_EMBED_PARTICIPANT_ID_REGEX": request.app.state.config.RESEARCH_EMBED_PARTICIPANT_ID_REGEX,
         "RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN": request.app.state.config.RESEARCH_EMBED_PARTICIPANT_EMAIL_DOMAIN,
         "RESEARCH_EMBED_ALLOWED_ORIGIN": request.app.state.config.RESEARCH_EMBED_ALLOWED_ORIGIN,
-        "RESEARCH_EMBED_TRACK_KEYSTROKES": request.app.state.config.RESEARCH_EMBED_TRACK_KEYSTROKES,
-        "RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS": request.app.state.config.RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS,
-        "RESEARCH_EMBED_TRACK_VISIBILITY": request.app.state.config.RESEARCH_EMBED_TRACK_VISIBILITY,
-        "RESEARCH_EMBED_TRACK_CLIPBOARD": request.app.state.config.RESEARCH_EMBED_TRACK_CLIPBOARD,
     }
 
 
@@ -238,18 +229,6 @@ async def set_research_embed_config(
     request.app.state.config.RESEARCH_EMBED_ALLOWED_ORIGIN = (
         form_data.RESEARCH_EMBED_ALLOWED_ORIGIN
     )
-    request.app.state.config.RESEARCH_EMBED_TRACK_KEYSTROKES = (
-        form_data.RESEARCH_EMBED_TRACK_KEYSTROKES
-    )
-    request.app.state.config.RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS = (
-        form_data.RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS
-    )
-    request.app.state.config.RESEARCH_EMBED_TRACK_VISIBILITY = (
-        form_data.RESEARCH_EMBED_TRACK_VISIBILITY
-    )
-    request.app.state.config.RESEARCH_EMBED_TRACK_CLIPBOARD = (
-        form_data.RESEARCH_EMBED_TRACK_CLIPBOARD
-    )
     return _config_to_dict(request)
 
 
@@ -293,6 +272,39 @@ async def get_model_research_embed_config(model_id: str, user=Depends(get_admin_
     return {
         "enabled": True,
         "seed_message": research_embed.get("seed_message") or "",
+    }
+
+
+class ModelTrackingConfigResponse(BaseModel):
+    track_keystrokes: bool
+    track_temporal_delays: bool
+    track_visibility: bool
+    track_clipboard: bool
+
+
+@router.get(
+    "/models/{model_id}/tracking-config", response_model=ModelTrackingConfigResponse
+)
+async def get_model_tracking_config(model_id: str, user=Depends(get_verified_user)):
+    """
+    Called by ANY signed-in user's own browser (src/lib/utils/
+    researchEmbedTracking.ts), not just admins -- unlike
+    GET /models/{model_id}/config above, this doesn't gate on the entry
+    service's admin key, since the client that needs these four booleans is
+    the participant's (or a staff member's, previewing the embed) own chat
+    page deciding whether to instrument itself at all. Returns all-False
+    rather than 404 for a model with no research_embed config -- these
+    booleans aren't sensitive, and a 404 here would just be extra client-side
+    special-casing for no real benefit.
+    """
+    model = Models.get_model_by_id(model_id)
+    research_embed = (getattr(model.meta, "research_embed", None) if model else None) or {}
+
+    return {
+        "track_keystrokes": bool(research_embed.get("track_keystrokes")),
+        "track_temporal_delays": bool(research_embed.get("track_temporal_delays")),
+        "track_visibility": bool(research_embed.get("track_visibility")),
+        "track_clipboard": bool(research_embed.get("track_clipboard")),
     }
 
 
@@ -461,14 +473,26 @@ async def ingest_research_embed_events(
     form_data: ResearchEmbedEventBatchForm,
     user=Depends(get_verified_user),
 ):
+    """
+    Which event types are accepted is now looked up from the batch's own
+    model_id (Model.meta.research_embed's track_* keys) rather than a global
+    config -- each study enables its own tracking independently. A batch
+    with no model_id, or one naming a model that doesn't exist, drops
+    everything: there's no instance-wide fallback to fall back to anymore,
+    so "unknown model" and "no tracking enabled" are treated the same way
+    (silently drop, don't error the participant's page over it).
+    """
+    model = Models.get_model_by_id(form_data.model_id) if form_data.model_id else None
+    research_embed = (getattr(model.meta, "research_embed", None) if model else None) or {}
+
     enabled_event_types = set()
-    if request.app.state.config.RESEARCH_EMBED_TRACK_KEYSTROKES:
+    if research_embed.get("track_keystrokes"):
         enabled_event_types.add("keystroke")
-    if request.app.state.config.RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS:
+    if research_embed.get("track_temporal_delays"):
         enabled_event_types.add("temporal_delay")
-    if request.app.state.config.RESEARCH_EMBED_TRACK_VISIBILITY:
+    if research_embed.get("track_visibility"):
         enabled_event_types.add("visibility")
-    if request.app.state.config.RESEARCH_EMBED_TRACK_CLIPBOARD:
+    if research_embed.get("track_clipboard"):
         enabled_event_types.add("clipboard")
 
     accepted = [e for e in form_data.events if e.event_type in enabled_event_types]
@@ -476,12 +500,13 @@ async def ingest_research_embed_events(
     if dropped:
         log.info(
             "Dropped %d research embed event(s) for a type that's currently "
-            "disabled (user_id=%s).",
+            "disabled (user_id=%s, model_id=%s).",
             dropped,
             user.id,
+            form_data.model_id,
         )
 
-    inserted = ResearchEmbedEvents.insert_events(user.id, accepted)
+    inserted = ResearchEmbedEvents.insert_events(user.id, form_data.model_id, accepted)
     return {"accepted": inserted, "dropped": dropped}
 
 
@@ -492,37 +517,29 @@ def _json_dumps_for_csv(data: dict) -> str:
         return str(data)
 
 
-@router.get("/events/export")
-async def export_research_embed_events(
-    request: Request,
-    format: str = "csv",
-    user=Depends(get_admin_user),
-):
-    """Admin-only. Every behavioral-tracking event ever recorded, across all
-    participants, oldest first. Meant for pulling into your own analysis
-    pipeline (R, pandas, etc.) -- this fork doesn't build an in-app
-    aggregate-analytics dashboard on top of this data."""
-    events = ResearchEmbedEvents.get_all_events()
+_EVENTS_CSV_HEADER = [
+    "id",
+    "user_id",
+    "chat_id",
+    "model_id",
+    "event_type",
+    "client_timestamp",
+    "created_at",
+    "data",
+]
 
-    if format == "json":
-        return [e.model_dump() for e in events]
 
-    if format != "csv":
-        raise HTTPException(
-            status_code=400, detail="format must be 'csv' or 'json'."
-        )
-
+def _events_to_csv_response(events: list, filename: str) -> StreamingResponse:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(
-        ["id", "user_id", "chat_id", "event_type", "client_timestamp", "created_at", "data"]
-    )
+    writer.writerow(_EVENTS_CSV_HEADER)
     for e in events:
         writer.writerow(
             [
                 e.id,
                 e.user_id,
                 e.chat_id or "",
+                e.model_id or "",
                 e.event_type,
                 e.client_timestamp if e.client_timestamp is not None else "",
                 e.created_at,
@@ -538,7 +555,71 @@ async def export_research_embed_events(
     return StreamingResponse(
         iter([buffer.getvalue()]),
         media_type="text/csv",
-        headers={
-            "Content-Disposition": "attachment; filename=research_embed_events.csv"
-        },
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+@router.get("/events/export")
+async def export_research_embed_events(
+    request: Request,
+    format: str = "csv",
+    user=Depends(get_admin_user),
+):
+    """Admin-only. Every behavioral-tracking event ever recorded, across
+    EVERY model/study on this instance at once, oldest first -- most
+    researchers running a single study want
+    GET /models/{model_id}/events?format=csv instead; this is for someone
+    who genuinely wants everything in one file. Meant for pulling into your
+    own analysis pipeline (R, pandas, etc.) -- this fork doesn't build an
+    in-app aggregate-analytics dashboard on top of this data."""
+    events = ResearchEmbedEvents.get_all_events()
+
+    if format == "json":
+        return [e.model_dump() for e in events]
+
+    if format != "csv":
+        raise HTTPException(
+            status_code=400, detail="format must be 'csv' or 'json'."
+        )
+
+    return _events_to_csv_response(events, "research_embed_events.csv")
+
+
+@router.get("/models/{model_id}/events")
+async def get_model_research_embed_events(
+    model_id: str,
+    format: str = "json",
+    limit: int = 50,
+    offset: int = 0,
+    event_type: Optional[str] = None,
+    user=Depends(get_admin_user),
+):
+    """
+    Admin-only, scoped to one model/study. Two shapes depending on `format`:
+
+    - format=json (default): a page of events -- {"total": N, "events": [...]}
+      -- meant for the in-app data viewer (Workspace > Models > Research
+      Embed > View Data). limit/offset paginate, event_type optionally
+      narrows to one of "keystroke"/"temporal_delay"/"visibility"/"clipboard".
+    - format=csv: EVERY event for this model (limit/offset/event_type are
+      ignored), as a single downloadable file -- meant for pulling into your
+      own analysis pipeline, same shape as the instance-wide
+      GET /events/export above but filtered to just this model.
+    """
+    if format == "csv":
+        events = ResearchEmbedEvents.get_events_by_model_id(model_id)
+        return _events_to_csv_response(
+            events, f"research_embed_events_{model_id}.csv"
+        )
+
+    if format != "json":
+        raise HTTPException(status_code=400, detail="format must be 'json' or 'csv'.")
+
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+
+    total = ResearchEmbedEvents.count_events_by_model_id(model_id, event_type)
+    events = ResearchEmbedEvents.get_events_by_model_id(
+        model_id, skip=offset, limit=limit, event_type=event_type
+    )
+    return {"total": total, "events": [e.model_dump() for e in events]}

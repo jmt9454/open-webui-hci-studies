@@ -2744,33 +2744,12 @@ RESEARCH_EMBED_ALLOWED_ORIGIN = PersistentConfig(
     os.environ.get("RESEARCH_EMBED_ALLOWED_ORIGIN", ""),
 )
 
-# ---- Behavioral tracking toggles (all default OFF) ----
-# Each gates one independent client-side instrumentation feature for the
-# research embed's chat UI (see src/lib/utils/researchEmbedTracking.ts).
-# These describe participant behavior at a much finer grain than chat
-# transcripts alone -- keystroke-level input, clipboard contents, tab-switch
-# behavior -- so they're opt-in per study and should only be enabled once
-# the study's IRB protocol / consent language explicitly covers them.
-RESEARCH_EMBED_TRACK_KEYSTROKES = PersistentConfig(
-    "RESEARCH_EMBED_TRACK_KEYSTROKES",
-    "research_embed.track_keystrokes",
-    os.environ.get("RESEARCH_EMBED_TRACK_KEYSTROKES", "False").lower() == "true",
-)
-
-RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS = PersistentConfig(
-    "RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS",
-    "research_embed.track_temporal_delays",
-    os.environ.get("RESEARCH_EMBED_TRACK_TEMPORAL_DELAYS", "False").lower() == "true",
-)
-
-RESEARCH_EMBED_TRACK_VISIBILITY = PersistentConfig(
-    "RESEARCH_EMBED_TRACK_VISIBILITY",
-    "research_embed.track_visibility",
-    os.environ.get("RESEARCH_EMBED_TRACK_VISIBILITY", "False").lower() == "true",
-)
-
-RESEARCH_EMBED_TRACK_CLIPBOARD = PersistentConfig(
-    "RESEARCH_EMBED_TRACK_CLIPBOARD",
-    "research_embed.track_clipboard",
-    os.environ.get("RESEARCH_EMBED_TRACK_CLIPBOARD", "False").lower() == "true",
-)
+# Behavioral tracking toggles (keystroke dynamics, temporal delays, tab
+# visibility, clipboard) used to live here as instance-wide PersistentConfig
+# entries. They're now per-model instead (Model.meta.research_embed's
+# track_keystrokes / track_temporal_delays / track_visibility /
+# track_clipboard keys, edited from Workspace > Models > Research Embed),
+# for the same reason the model/seed message moved: more than one study can
+# run on this instance at once, and each should be able to enable its own
+# tracking independently. See routers/research_embed.py's
+# GET /models/{model_id}/tracking-config and POST /events.

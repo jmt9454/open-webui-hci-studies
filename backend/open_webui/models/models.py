@@ -47,14 +47,22 @@ class ModelMeta(BaseModel):
     research_embed: Optional[dict] = None
     """
         Optional per-model research embed config: {"enabled": bool,
-        "seed_message": str}. Lets a study/condition be embedded as a
+        "seed_message": str, "track_keystrokes": bool,
+        "track_temporal_delays": bool, "track_visibility": bool,
+        "track_clipboard": bool}. Lets a study/condition be embedded as a
         chat-only Qualtrics link scoped to this one model, independent of
         any other model's research embed settings on the same instance --
         see futurefeature.md and backend/open_webui/routers/research_embed.py.
-        Enabling this (or changing seed_message) is admin-only regardless of
-        who can otherwise edit this model, enforced server-side in
-        routers/models.py, since it opens an unauthenticated public entry
-        point that creates real accounts and spends this model's API budget.
+        The four track_* keys are optional behavioral-tracking toggles
+        (keystroke dynamics, response-delay timing, tab-visibility during
+        streaming, clipboard copy/paste), all default-False, re-checked
+        server-side on every event batch (POST /events) so a stale/modified
+        frontend can't write data for a feature that's off. Enabling
+        research embed (or changing seed_message/any track_* toggle) is
+        admin-only regardless of who can otherwise edit this model, enforced
+        server-side in routers/models.py, since it opens an unauthenticated
+        public entry point that creates real accounts and spends this
+        model's API budget, and/or records participant behavioral data.
     """
 
     model_config = ConfigDict(extra="allow")

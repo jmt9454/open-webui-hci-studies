@@ -2,20 +2,26 @@
  * Client-side collection for the research embed's optional behavioral-
  * tracking features (keystroke dynamics, temporal delays, tab-visibility
  * during streaming, clipboard copy/paste). See
- * backend/open_webui/routers/research_embed.py (POST /events) and
+ * backend/open_webui/routers/research_embed.py (POST /events,
+ * GET /models/{model_id}/tracking-config) and
  * backend/open_webui/models/research_embed_events.py for the server side.
  *
  * Design notes:
- * - Every record* function re-checks the relevant RESEARCH_EMBED_TRACK_*
- *   toggle (via the public /api/config `features.research_embed` block)
- *   before doing anything, and the toggle is also re-checked server-side on
- *   ingest -- so flipping a toggle off in Admin Settings stops new data
- *   immediately, it doesn't just hide a client-side control.
+ * - Tracking toggles are per-model (Model.meta.research_embed's track_*
+ *   keys), not instance-wide -- setResearchEmbedTrackingModel() fetches and
+ *   caches the current chat's model's toggles, and every record* function
+ *   re-checks them before doing anything. The toggles are also re-checked
+ *   server-side on ingest against that same model -- so flipping a toggle
+ *   off in Workspace > Models > Research Embed stops new data immediately,
+ *   it doesn't just hide a client-side control.
  * - When a toggle is off, nothing is buffered or measured for that event
  *   type at all (not just "collected but not sent") -- there's no reason to
  *   hold data in memory for a feature the admin hasn't turned on.
  * - Events are batched in memory and flushed periodically or on
- *   visibility/unload, rather than one HTTP request per keystroke.
+ *   visibility/unload, rather than one HTTP request per keystroke. Every
+ *   flush tags the whole batch with the CURRENT model id -- fine in
+ *   practice since a research embed chat page has exactly one model for its
+ *   whole lifetime.
  * - The unload-time flush uses navigator.sendBeacon rather than fetch,
  *   since a fetch started during page teardown is not reliably delivered.
  *   sendBeacon can't set an Authorization header, but Open WebUI also sets
@@ -28,12 +34,17 @@
  *   an admin ever flips these toggles on.
  */
 
-import { get } from 'svelte/store';
-import { config } from '$lib/stores';
 import { WEBUI_API_BASE_URL } from '$lib/constants';
-import { sendResearchEmbedEvents } from '$lib/apis/researchEmbed';
+import { getModelTrackingConfig, sendResearchEmbedEvents } from '$lib/apis/researchEmbed';
 
 type TrackedEventType = 'keystroke' | 'temporal_delay' | 'visibility' | 'clipboard';
+
+type TrackingConfig = {
+	track_keystrokes: boolean;
+	track_temporal_delays: boolean;
+	track_visibility: boolean;
+	track_clipboard: boolean;
+};
 
 const FLUSH_INTERVAL_MS = 15000;
 const MAX_BUFFERED_EVENTS = 50;
@@ -50,6 +61,14 @@ let buffer: Array<{
 let flushTimer: ReturnType<typeof setInterval> | null = null;
 let currentChatId: string | null = null;
 
+// currentModelId is the model the chat page says it's using right now;
+// trackingConfig is the last fetched tracking-config response for THAT
+// model. They're tracked separately (rather than one "loading" flag) so a
+// slow-to-resolve fetch for a model the user has since navigated away from
+// can be safely ignored -- see setResearchEmbedTrackingModel.
+let currentModelId: string | null = null;
+let trackingConfig: TrackingConfig | null = null;
+
 // Treated as "streaming" from the moment a message is sent until the
 // response finishes -- an approximation (the true streaming window starts a
 // little later, once the first token arrives) but close enough for
@@ -61,18 +80,17 @@ let hiddenSince: number | null = null;
 let hiddenStartedDuringStreaming = false;
 
 function isTrackingEnabled(eventType: TrackedEventType): boolean {
-	const features = get(config)?.features?.research_embed;
-	if (!features) return false;
+	if (!trackingConfig) return false;
 
 	switch (eventType) {
 		case 'keystroke':
-			return !!features.track_keystrokes;
+			return !!trackingConfig.track_keystrokes;
 		case 'temporal_delay':
-			return !!features.track_temporal_delays;
+			return !!trackingConfig.track_temporal_delays;
 		case 'visibility':
-			return !!features.track_visibility;
+			return !!trackingConfig.track_visibility;
 		case 'clipboard':
-			return !!features.track_clipboard;
+			return !!trackingConfig.track_clipboard;
 		default:
 			return false;
 	}
@@ -101,7 +119,9 @@ function flush(useBeacon = false) {
 
 	if (useBeacon && typeof navigator !== 'undefined' && navigator.sendBeacon) {
 		try {
-			const blob = new Blob([JSON.stringify({ events })], { type: 'application/json' });
+			const blob = new Blob([JSON.stringify({ model_id: currentModelId, events })], {
+				type: 'application/json'
+			});
 			const delivered = navigator.sendBeacon(`${WEBUI_API_BASE_URL}/research-embed/events`, blob);
 			if (delivered) return;
 		} catch (e) {
@@ -112,7 +132,7 @@ function flush(useBeacon = false) {
 	const token = localStorage.token;
 	if (!token) return;
 
-	sendResearchEmbedEvents(token, events);
+	sendResearchEmbedEvents(token, currentModelId, events);
 }
 
 /**
@@ -153,6 +173,35 @@ export function initResearchEmbedTracking() {
 
 export function setResearchEmbedTrackingChatId(chatId: string | null) {
 	currentChatId = chatId ?? null;
+}
+
+/**
+ * Fetches and caches the tracking config (the four track_* booleans) for
+ * whichever model the chat page is currently using. Call this whenever the
+ * selected model changes (Chat.svelte does this reactively off
+ * selectedModels[0]) -- a no-op if the model id hasn't actually changed, so
+ * it's safe to call on every reactive update rather than only on real
+ * transitions. Fails closed: until the fetch resolves (or if it fails),
+ * isTrackingEnabled() returns false for every event type, same as "no
+ * tracking configured at all."
+ */
+export function setResearchEmbedTrackingModel(modelId: string | null) {
+	const normalized = modelId ?? null;
+	if (normalized === currentModelId) return;
+
+	currentModelId = normalized;
+	trackingConfig = null;
+
+	if (!normalized || typeof localStorage === 'undefined' || !localStorage.token) return;
+
+	const requestedModelId = normalized;
+	getModelTrackingConfig(localStorage.token, requestedModelId).then((cfg) => {
+		// The user may have switched models again before this resolved --
+		// don't let a stale response overwrite a newer model's config.
+		if (currentModelId === requestedModelId && cfg) {
+			trackingConfig = cfg;
+		}
+	});
 }
 
 // Coarse key category only -- deliberately never the actual key/character,
