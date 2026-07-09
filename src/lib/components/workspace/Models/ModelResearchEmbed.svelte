@@ -8,6 +8,7 @@
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Textarea from '$lib/components/common/Textarea.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
+	import ModelResearchEmbedData from '$lib/components/workspace/Models/ModelResearchEmbedData.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -19,7 +20,14 @@
 	// API budget, and the server independently refuses to let a non-admin
 	// change this via a direct API call either (see
 	// backend/open_webui/routers/models.py's _enforce_research_embed_admin_only).
-	export let research_embed: { enabled?: boolean; seed_message?: string } = {};
+	export let research_embed: {
+		enabled?: boolean;
+		seed_message?: string;
+		track_keystrokes?: boolean;
+		track_temporal_delays?: boolean;
+		track_visibility?: boolean;
+		track_clipboard?: boolean;
+	} = {};
 
 	// Only a saved, real model has an id the embed URL can point at -- while
 	// creating a brand-new model, this section can't generate a link yet
@@ -74,6 +82,37 @@
 				)}
 				bind:value={research_embed.seed_message}
 			/>
+		</div>
+
+		<div class="mb-2">
+			<div class=" mb-1 text-xs font-medium">{$i18n.t('Behavioral Tracking')}</div>
+			<div class="text-xs text-gray-500 mb-2">
+				{$i18n.t(
+					'Optional, off by default. Each toggle enables a separate stream of participant telemetry for THIS model only -- check your IRB protocol before enabling any of these. All four are re-checked server-side, so disabling one here stops new events from being accepted even if a participant\'s page was loaded before the change.'
+				)}
+			</div>
+
+			<div class="flex w-full justify-between items-center pr-2 mb-1">
+				<div class=" self-center text-xs">{$i18n.t('Keystroke Dynamics')}</div>
+				<Switch bind:state={research_embed.track_keystrokes} />
+			</div>
+			<div class="flex w-full justify-between items-center pr-2 mb-1">
+				<div class=" self-center text-xs">{$i18n.t('Temporal Delays')}</div>
+				<Switch bind:state={research_embed.track_temporal_delays} />
+			</div>
+			<div class="flex w-full justify-between items-center pr-2 mb-1">
+				<div class=" self-center text-xs">{$i18n.t('Tab Visibility')}</div>
+				<Switch bind:state={research_embed.track_visibility} />
+			</div>
+			<div class="flex w-full justify-between items-center pr-2 mb-1">
+				<div class=" self-center text-xs">{$i18n.t('Copy/Paste Events')}</div>
+				<Switch bind:state={research_embed.track_clipboard} />
+			</div>
+			<div class="text-xs text-gray-500 mt-1">
+				{$i18n.t(
+					'Copy/Paste logs the copied/pasted text itself, not just timing -- the most sensitive of the four. Make sure your consent language covers clipboard content specifically before enabling it.'
+				)}
+			</div>
 		</div>
 
 		{#if !isPersisted}
@@ -166,6 +205,8 @@
 					</div>
 				{/if}
 			</div>
+
+			<ModelResearchEmbedData {modelId} />
 		{/if}
 	{/if}
 </div>

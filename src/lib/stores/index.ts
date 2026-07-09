@@ -213,12 +213,13 @@ type Config = {
 		enable_admin_chat_access: boolean;
 		enable_community_sharing: boolean;
 		enable_autocomplete_generation: boolean;
-		research_embed?: {
-			track_keystrokes: boolean;
-			track_temporal_delays: boolean;
-			track_visibility: boolean;
-			track_clipboard: boolean;
-		};
+		// research_embed behavioral-tracking toggles used to live here,
+		// instance-wide. They're per-model now (Model.meta.research_embed),
+		// fetched via getModelTrackingConfig() in
+		// src/lib/utils/researchEmbedTracking.ts instead of read off this
+		// global config object -- see backend/open_webui/main.py's /api/config
+		// handler and routers/research_embed.py's
+		// GET /models/{model_id}/tracking-config.
 	};
 	oauth: {
 		providers: {

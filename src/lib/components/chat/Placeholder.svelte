@@ -20,6 +20,19 @@
 
 	export let transparentBackground = false;
 
+	// Research embed: forwarded straight through to the internal MessageInput
+	// below. This component is the "empty chat" landing screen shown before
+	// any messages exist -- which is exactly what a fresh research embed
+	// participant sees first, especially when a model has no seed message.
+	// Chat.svelte's main MessageInput usage already receives chatOnly (see
+	// MessageInput.svelte's own comment on its chatOnly prop for the full
+	// story), but this component has its own separate internal MessageInput
+	// instance that was missing this prop entirely -- so a participant's
+	// very first message still hit the default $mobile-width Enter-to-send
+	// heuristic, which false-positives inside a narrow iframe. Fixed here by
+	// giving Placeholder the same chatOnly prop and passing it down.
+	export let chatOnly = false;
+
 	export let createMessagePair: Function;
 	export let stopResponse: Function;
 
@@ -188,6 +201,7 @@
 				<MessageInput
 					{history}
 					{selectedModels}
+					{chatOnly}
 					bind:files
 					bind:prompt
 					bind:autoScroll

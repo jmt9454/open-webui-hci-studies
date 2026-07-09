@@ -88,7 +88,11 @@
 	// that's never had this section touched.
 	let researchEmbed = {
 		enabled: false,
-		seed_message: ''
+		seed_message: '',
+		track_keystrokes: false,
+		track_temporal_delays: false,
+		track_visibility: false,
+		track_clipboard: false
 	};
 
 	let knowledge = [];

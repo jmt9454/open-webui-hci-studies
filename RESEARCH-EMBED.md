@@ -216,6 +216,8 @@ independent per model):
 |---|---|
 | Enabled | Turns research embed on for this specific model. Off by default on every model. |
 | Seed Message | First message auto-sent on a participant's first visit to this model's chat. Leave empty to start on a blank chat instead. |
+| Behavioral Tracking (Keystroke Dynamics / Temporal Delays / Tab Visibility / Copy/Paste Events) | Four independent toggles, all off by default, scoped to THIS model only -- two studies running on the same instance can enable completely different tracking. Each is re-checked server-side on every batch of events a participant's browser sends, so turning one off here stops new data immediately even for already-open participant sessions. Copy/Paste logs the copied/pasted text itself (not just timing) -- the most sensitive of the four, make sure your IRB protocol and consent language specifically cover clipboard content before enabling it. |
+| Tracking Data (View Data / Download CSV) | View Data opens a paginated, filterable table of this model's tracked events right in the editor. Download CSV always exports everything for this model, regardless of what's currently shown in the table. See [Behavioral tracking data](#behavioral-tracking-data). |
 | Qualtrics Entry URL / Iframe Snippet | Generated from the model's saved id, enabled state, and the instance-wide settings below. Only appears once the model has been saved at least once; click Refresh after changing Enabled/Seed Message and saving. |
 
 Also give the model non-admin access control (Workspace > Models > edit ->
@@ -231,10 +233,6 @@ study):
 | Participant Email Domain | Participant accounts are created as `{id}.{scope}@this-domain` -- purely internal, used to tell participant accounts apart from staff accounts (the `.{scope}` part keeps different studies' participant pools from colliding, see [Running more than one study](#running-more-than-one-study-at-once)). |
 | Allowed Embed Origin | Sets the `Content-Security-Policy: frame-ancestors` response header so browsers will actually render the iframe. Must match your survey platform's real domain (check your survey's share link -- some institutions are on a subdomain like `yourschool.co1.qualtrics.com`). If multiple studies embed from different platforms, this needs to cover all of them. |
 | Connect Entry Service | Pushes a fresh admin API key to entry-service so it can create accounts. Safe to click again any time (e.g. after rotating keys). Only needs doing once, regardless of how many studies you run. |
-| Keystroke Dynamics | Off by default. Logs key-down/key-up timing in the chat input (never the actual keys) to support typing-rhythm analysis. Applies to every study on this instance. |
-| Temporal Delays | Off by default. Logs the time between a response finishing and the participant sending their next message. Applies to every study on this instance. |
-| Tab Visibility | Off by default. Logs when a participant switches away from the tab while a response is streaming, and for how long. Applies to every study on this instance. |
-| Copy/Paste Events | Off by default. Logs copy and paste events in the chat input, including the copied/pasted text. The most sensitive of the four -- make sure your IRB protocol and consent language specifically cover clipboard content before enabling it. Applies to every study on this instance. |
 
 ## Running more than one study at once
 
@@ -255,25 +253,48 @@ link.
 
 ## Behavioral tracking data
 
-The four toggles above are all off by default and independent of each other
--- turning one on only affects that stream of data, and each is re-checked
-server-side on every batch of events a participant's browser sends, so
-turning one off in Admin Settings stops new data immediately even for
-already-open participant sessions.
+The four toggles (Workspace > Models > your model > Research Embed >
+Behavioral Tracking) are all off by default and independent of each other --
+turning one on only affects that stream of data for that model, and each is
+re-checked server-side on every batch of events a participant's browser
+sends, so turning one off stops new data immediately even for already-open
+participant sessions.
 
 Collected events land in their own database table (`research_embed_event`),
-never mixed into chat transcripts. To pull everything collected so far for
-analysis:
+never mixed into chat transcripts, tagged with which model produced them.
+Three ways to get at the data, all admin-only:
 
-```
-GET /api/v1/research-embed/events/export?format=csv
-GET /api/v1/research-embed/events/export?format=json
-```
+- **In the browser**: Workspace > Models > your model > Research Embed >
+  "View Data" opens a paginated table right there, with a dropdown to filter
+  to one event type at a time. Good for a quick sanity check that tracking
+  is actually recording something before you send the link to real
+  participants.
+- **Per-model CSV/JSON download**: the "Download CSV" link next to "View
+  Data" (or hit the endpoint directly):
 
-(admin authentication required, e.g. `Authorization: Bearer <your API key>`).
-CSV is the default; each row is one event with a `data` column holding a
-JSON blob whose shape depends on `event_type` (`keystroke`, `temporal_delay`,
-`visibility`, or `clipboard`).
+  ```
+  GET /api/v1/research-embed/models/{model_id}/events?format=csv
+  GET /api/v1/research-embed/models/{model_id}/events?format=json
+  ```
+
+  Always the full dataset for that one model, regardless of what's currently
+  shown in the in-browser table.
+- **Everything, across every model/study on the instance at once** (rarely
+  what you want if you're running more than one study, but there if you
+  need it):
+
+  ```
+  GET /api/v1/research-embed/events/export?format=csv
+  GET /api/v1/research-embed/events/export?format=json
+  ```
+
+All three require admin authentication -- if you're calling them directly
+rather than clicking the links/buttons in Settings, pass
+`Authorization: Bearer <your API key>` (a browser that's already logged in
+as admin can also just navigate to the URL directly; the session cookie
+authenticates it). CSV is the default for the per-model endpoint; each row
+is one event with a `data` column holding a JSON blob whose shape depends on
+`event_type` (`keystroke`, `temporal_delay`, `visibility`, or `clipboard`).
 
 Get IRB approval for whichever of these you plan to enable, and make sure
 your consent language matches what's actually being collected, before
@@ -411,20 +432,35 @@ docker compose -f docker-compose.yaml -f docker-compose.research-embed.yml build
   (required) and `survey` (optional) query params on `/enter`, and scopes
   participant accounts/chats accordingly.
 - `backend/open_webui/routers/research_embed.py` -- the instance-wide
-  admin-configurable settings API (participant ID format, allowed origin,
-  behavioral-tracking toggles) plus the per-model
-  `GET /models/{id}/config` and `GET /models/{id}/embed-code` endpoints.
+  admin-configurable settings API (participant ID format, allowed origin)
+  plus the per-model `GET /models/{id}/config`, `GET /models/{id}/embed-code`,
+  `GET /models/{id}/tracking-config`, `POST /events`, and
+  `GET /models/{id}/events` (viewer/CSV, both scoped to one model) endpoints.
 - `backend/open_webui/models/models.py` -- `ModelMeta.research_embed` is
-  where a model's own `{enabled, seed_message}` lives (no migration needed,
-  `meta` is already a free-form JSON blob).
+  where a model's own `{enabled, seed_message, track_keystrokes,
+  track_temporal_delays, track_visibility, track_clipboard}` lives (no
+  migration needed for this dict itself, `meta` is already a free-form JSON
+  blob).
+- `backend/open_webui/models/research_embed_events.py` and the Alembic
+  migrations `670d7c5c0ffa_add_research_embed_event_table.py` /
+  `9f2e6d1c4a80_add_model_id_to_research_embed_event.py` -- the
+  `research_embed_event` table itself, including the `model_id` column that
+  lets exports/the viewer scope to one study.
+- `src/lib/utils/researchEmbedTracking.ts` -- client-side event collection
+  (keystroke/temporal_delay/visibility/clipboard), batching, and flush. Fetches
+  and caches the CURRENT model's tracking config via
+  `setResearchEmbedTrackingModel()`, called reactively from `Chat.svelte`
+  whenever the selected model changes.
 - `backend/open_webui/routers/models.py` -- `_enforce_research_embed_admin_only`
-  is what stops a non-admin from enabling this via a direct API call even if
-  they can otherwise edit the model.
+  is what stops a non-admin from enabling this (or its tracking toggles) via
+  a direct API call even if they can otherwise edit the model.
 - `src/lib/components/admin/Settings/ResearchEmbed.svelte` -- the admin UI
   for the instance-wide settings above.
 - `src/lib/components/workspace/Models/ModelResearchEmbed.svelte`, wired
   into `ModelEditor.svelte` -- the per-model admin-only UI (Enabled, Seed
-  Message, generated embed code).
+  Message, the four Behavioral Tracking toggles, generated embed code).
+  `ModelResearchEmbedData.svelte` is the in-app data viewer/CSV-download
+  section it renders once a model is saved.
 - `src/routes/(app)/+layout.svelte` and `src/lib/components/chat/Chat.svelte`
   -- where chat-only mode (hiding the sidebar/navbar/settings) is
   implemented, gated on participant email domain.

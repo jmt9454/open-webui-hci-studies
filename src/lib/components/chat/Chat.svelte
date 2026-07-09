@@ -81,6 +81,7 @@
 	import {
 		initResearchEmbedTracking,
 		setResearchEmbedTrackingChatId,
+		setResearchEmbedTrackingModel,
 		onResearchEmbedMessageSent,
 		onResearchEmbedStreamingDone
 	} from '$lib/utils/researchEmbedTracking';
@@ -107,8 +108,9 @@
 
 	// Research embed: optional behavioral-tracking events get tagged with
 	// whichever chat they happened in (null until the first message creates
-	// one). Not gated on chatOnly -- the ingest endpoint and its four admin
-	// toggles are what actually decide whether anything gets recorded.
+	// one). Not gated on chatOnly -- the ingest endpoint and that model's own
+	// track_* toggles (see below) are what actually decide whether anything
+	// gets recorded.
 	$: setResearchEmbedTrackingChatId($chatId);
 	// --- end research embed ---
 
@@ -138,6 +140,15 @@
 	let atSelectedModel: Model | undefined;
 	let selectedModelIds = [];
 	$: selectedModelIds = atSelectedModel !== undefined ? [atSelectedModel.id] : selectedModels;
+
+	// --- Research embed (continued from above) ---
+	// Tracking toggles are per-model now, not instance-wide -- whenever the
+	// selected model changes, fetch (and cache) that model's track_*
+	// settings. selectedModels[0] is used rather than atSelectedModel since
+	// a research embed chat only ever has one model selected; '' (the
+	// placeholder before a model loads) is normalized to null.
+	$: setResearchEmbedTrackingModel(selectedModels?.[0] || null);
+	// --- end research embed ---
 
 	let selectedToolIds = [];
 	let imageGenerationEnabled = false;
@@ -2123,6 +2134,7 @@
 							<Placeholder
 								{history}
 								{selectedModels}
+								{chatOnly}
 								bind:files
 								bind:prompt
 								bind:autoScroll
